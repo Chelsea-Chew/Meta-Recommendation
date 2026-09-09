@@ -1,0 +1,330 @@
+{
+  "metadata": {
+    "python": "3.11.4 (tags/v3.11.4:d2340ef, Jun  7 2023, 05:45:37) [MSC v.1934 64 bit (AMD64)]",
+    "packages": {
+      "openai": "1.12.0",
+      "httpx": "0.26.0",
+      "fastapi": "0.104.1",
+      "pydantic": "2.12.5",
+      "langgraph": "1.1.10",
+      "langgraph-checkpoint-postgres": "3.0.5",
+      "pytest": "9.0.2",
+      "pytest-asyncio": "1.3.0"
+    },
+    "all_installed_packages": {
+      "aiofiles": "23.2.1",
+      "alembic": "1.16.1",
+      "annotated-types": "0.8.0",
+      "anyio": "3.7.1",
+      "bcrypt": "5.0.0",
+      "certifi": "2026.7.22",
+      "cffi": "2.1.1",
+      "charset-normalizer": "3.5.1",
+      "click": "8.5.0",
+      "colorama": "0.4.6",
+      "cryptography": "50.0.1",
+      "distro": "1.9.0",
+      "ecdsa": "0.19.2",
+      "fastapi": "0.104.1",
+      "greenlet": "3.5.5",
+      "h11": "0.16.0",
+      "httpcore": "1.0.9",
+      "httpcore2": "2.6.0",
+      "httpx": "0.26.0",
+      "httpx2": "2.6.0",
+      "idna": "3.19",
+      "iniconfig": "2.3.0",
+      "jsonpatch": "1.33",
+      "jsonpointer": "3.1.1",
+      "langchain-core": "1.6.1",
+      "langchain-protocol": "0.0.19",
+      "langgraph": "1.1.10",
+      "langgraph-checkpoint": "4.2.0",
+      "langgraph-checkpoint-postgres": "3.0.5",
+      "langgraph-prebuilt": "1.0.13",
+      "langgraph-sdk": "0.3.15",
+      "langsmith": "0.12.1",
+      "Mako": "1.4.1",
+      "MarkupSafe": "3.0.3",
+      "openai": "1.12.0",
+      "orjson": "3.12.0",
+      "ormsgpack": "1.12.2",
+      "packaging": "26.3",
+      "passlib": "1.7.4",
+      "pip": "23.1.2",
+      "pluggy": "1.6.0",
+      "psycopg": "3.3.4",
+      "psycopg-binary": "3.3.4",
+      "psycopg-pool": "3.3.1",
+      "pyasn1": "0.6.4",
+      "pycparser": "3.0",
+      "pydantic": "2.12.5",
+      "pydantic_core": "2.41.5",
+      "Pygments": "2.21.0",
+      "pytest": "9.0.2",
+      "pytest-asyncio": "1.3.0",
+      "python-dotenv": "1.0.0",
+      "python-jose": "3.3.0",
+      "python-multipart": "0.0.6",
+      "PyYAML": "6.0.3",
+      "requests": "2.31.0",
+      "requests-toolbelt": "1.0.0",
+      "rsa": "4.9.1",
+      "setuptools": "65.5.0",
+      "six": "1.17.0",
+      "sniffio": "1.3.1",
+      "SQLAlchemy": "2.0.41",
+      "starlette": "0.27.0",
+      "tenacity": "9.1.4",
+      "tqdm": "4.70.0",
+      "truststore": "0.10.4",
+      "typing-inspection": "0.4.4",
+      "typing_extensions": "4.16.0",
+      "tzdata": "2026.3",
+      "urllib3": "2.7.0",
+      "uuid_utils": "0.17.0",
+      "uvicorn": "0.24.0",
+      "websockets": "17.1",
+      "xxhash": "4.0.1",
+      "zstandard": "0.25.0"
+    },
+    "source_sha256": {
+      "requirements.txt": "bf648ed57161ef58478614cda96615913f527ecedcdd2e2c6861be6f010ad7c9",
+      "requirements-dev.txt": "b6a4db53be8b5143a44e548d5d0a66ab7563c20036ae0bbab9a18767e911fc66",
+      "pyproject.toml": "1e6684d371de48dbb3825d9c1c4d44a94ea073d40e18e08f21acacd72d4cde9d",
+      "pytest.ini": "3e7b1733fb41c73e612c839e09f442f32c424db6aafe8770e5a7ae679956679d",
+      "client.py": "3bffb46d9cdbe132b8208a3efd8cbb4ef966263c79a1bd9cf7408c1ffda2f9ff",
+      "llm_compat.py": "532a71e07cec74aaade7884078c5eb4282424c9940b6bd9741e6247db5edaec5",
+      "llm_usage.py": "121d9eba9315eaf7aec30e164b778c439f9d202255cec7f3de288a20b66d5609",
+      "llm_service.py": "30cd0369de80954b666f6b32d6c316a93804de5889028af1ba8d1e3c7c1dfa70"
+    },
+    "git_revision": "9c093469eb1a9bbf3fb43bff677994ce8facd70e",
+    "git_status_short": [
+      "?? ../AGENTS.md",
+      "?? .venv-baseline/",
+      "?? artifacts/",
+      "?? scripts/reproduce_wp5_stage1_baseline.py",
+      "?? ../docs/"
+    ],
+    "safe_environment": {
+      "LLM_PRICE_TABLE_JSON": "{\"baseline-model\":{\"input\":2.0,\"output\":8.0}}"
+    },
+    "synthetic_price_table": {
+      "baseline-model": {
+        "input": 2.0,
+        "output": 8.0
+      }
+    },
+    "script": "reproduce_wp5_stage1_baseline.py",
+    "command": "scripts/reproduce_wp5_stage1_baseline.py --output artifacts/stage1_baseline_raw.json",
+    "live_provider_calls": false
+  },
+  "scenarios": [
+    {
+      "scenario": "successful_response_with_usage",
+      "logical_request_count": 1,
+      "physical_provider_invocation_count": 1,
+      "visible_usage_event_count": 1,
+      "invisible_attempt_count": 0,
+      "retry_count": 0,
+      "usage_events": [
+        {
+          "model": "baseline-model",
+          "prompt_tokens": 100,
+          "completion_tokens": 20,
+          "total_tokens": 120,
+          "cost_usd": 0.00036
+        }
+      ],
+      "totals": {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+        "cost_usd": 0.00036
+      },
+      "error": null,
+      "result_type": "ScriptedResponse"
+    },
+    {
+      "scenario": "successful_response_without_usage",
+      "logical_request_count": 1,
+      "physical_provider_invocation_count": 1,
+      "visible_usage_event_count": 0,
+      "invisible_attempt_count": 1,
+      "retry_count": 0,
+      "usage_events": [],
+      "totals": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0
+      },
+      "error": null,
+      "result_type": "ScriptedResponse"
+    },
+    {
+      "scenario": "provider_exception",
+      "logical_request_count": 1,
+      "physical_provider_invocation_count": 1,
+      "visible_usage_event_count": 0,
+      "invisible_attempt_count": 1,
+      "retry_count": 0,
+      "usage_events": [],
+      "totals": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0
+      },
+      "error": "RuntimeError: synthetic provider failure"
+    },
+    {
+      "scenario": "compatibility_retry",
+      "logical_request_count": 1,
+      "physical_provider_invocation_count": 2,
+      "visible_usage_event_count": 1,
+      "invisible_attempt_count": 1,
+      "retry_count": 1,
+      "usage_events": [
+        {
+          "model": "baseline-model",
+          "prompt_tokens": 100,
+          "completion_tokens": 20,
+          "total_tokens": 120,
+          "cost_usd": 0.00036
+        }
+      ],
+      "totals": {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+        "cost_usd": 0.00036
+      },
+      "error": null,
+      "result_type": "ScriptedResponse"
+    },
+    {
+      "scenario": "response_format_fallback",
+      "logical_request_count": 1,
+      "physical_provider_invocation_count": 2,
+      "visible_usage_event_count": 1,
+      "invisible_attempt_count": 1,
+      "retry_count": 1,
+      "usage_events": [
+        {
+          "model": "baseline-model",
+          "prompt_tokens": 100,
+          "completion_tokens": 20,
+          "total_tokens": 120,
+          "cost_usd": 0.00036
+        }
+      ],
+      "totals": {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+        "cost_usd": 0.00036
+      },
+      "error": null,
+      "result_type": "LLMResponse",
+      "intent": "chat",
+      "confidence": 0.9
+    },
+    {
+      "scenario": "malformed_structured_output_no_retry",
+      "logical_request_count": 1,
+      "physical_provider_invocation_count": 1,
+      "visible_usage_event_count": 1,
+      "invisible_attempt_count": 0,
+      "retry_count": 0,
+      "usage_events": [
+        {
+          "model": "baseline-model",
+          "prompt_tokens": 100,
+          "completion_tokens": 20,
+          "total_tokens": 120,
+          "cost_usd": 0.00036
+        }
+      ],
+      "totals": {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+        "cost_usd": 0.00036
+      },
+      "error": null,
+      "result_type": "LLMResponse",
+      "intent": "chat",
+      "confidence": 0.6
+    },
+    {
+      "scenario": "empty_structured_output_then_retry",
+      "logical_request_count": 1,
+      "physical_provider_invocation_count": 2,
+      "visible_usage_event_count": 2,
+      "invisible_attempt_count": 0,
+      "retry_count": 1,
+      "usage_events": [
+        {
+          "model": "baseline-model",
+          "prompt_tokens": 100,
+          "completion_tokens": 20,
+          "total_tokens": 120,
+          "cost_usd": 0.00036
+        },
+        {
+          "model": "baseline-model",
+          "prompt_tokens": 100,
+          "completion_tokens": 20,
+          "total_tokens": 120,
+          "cost_usd": 0.00036
+        }
+      ],
+      "totals": {
+        "prompt_tokens": 200,
+        "completion_tokens": 40,
+        "total_tokens": 240,
+        "cost_usd": 0.00072
+      },
+      "error": null,
+      "result_type": "LLMResponse",
+      "intent": "chat",
+      "confidence": 0.9
+    },
+    {
+      "scenario": "sdk_automatic_retry_500_then_success",
+      "logical_request_count": 1,
+      "physical_provider_invocation_count": 2,
+      "visible_usage_event_count": 1,
+      "invisible_attempt_count": 1,
+      "retry_count": 1,
+      "usage_events": [
+        {
+          "model": "baseline-model",
+          "prompt_tokens": 100,
+          "completion_tokens": 20,
+          "total_tokens": 120,
+          "cost_usd": 0.00036
+        }
+      ],
+      "totals": {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+        "cost_usd": 0.00036
+      },
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://stage1.mock/v1/chat/completions"
+        },
+        {
+          "method": "POST",
+          "url": "http://stage1.mock/v1/chat/completions"
+        }
+      ],
+      "error": null,
+      "sdk_max_retries": 2
+    }
+  ]
+}

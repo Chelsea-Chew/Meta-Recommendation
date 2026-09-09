@@ -1,0 +1,472 @@
+{
+  "metadata": {
+    "experiment": "phase1-stage2-representative-workload-baseline",
+    "schema_version": "stage2-representative-workload.v1",
+    "git_revision": "9c093469eb1a9bbf3fb43bff677994ce8facd70e",
+    "git_status_short": [
+      " M .gitignore",
+      "?? AGENTS.md",
+      "?? MetaRec-backend/artifacts/",
+      "?? MetaRec-backend/scripts/reproduce_wp5_stage1_baseline.py",
+      "?? MetaRec-backend/scripts/reproduce_wp5_stage2_baseline.py",
+      "?? docs/"
+    ],
+    "source_sha256": {
+      "client.py": "3bffb46d9cdbe132b8208a3efd8cbb4ef966263c79a1bd9cf7408c1ffda2f9ff",
+      "llm_compat.py": "532a71e07cec74aaade7884078c5eb4282424c9940b6bd9741e6247db5edaec5",
+      "llm_usage.py": "121d9eba9315eaf7aec30e164b778c439f9d202255cec7f3de288a20b66d5609",
+      "llm_service.py": "30cd0369de80954b666f6b32d6c316a93804de5889028af1ba8d1e3c7c1dfa70",
+      "service.py": "e599a0761b9bc47feb904c39cfcb095faf81ffbb2cce972e5b7bc7853cfdc09c",
+      "conversation_context.py": "04d2c2d6f7d2eef9c88961e91b193f44a9d4dd468c566120d017a502284ed46a",
+      "langgraph_metarec/graphs/request_orchestrator.py": "ffb11945962fea8f06d61b4cab85dc1ad78864a0ec0673b046f591c023fb1dad",
+      "langgraph_metarec/graphs/generic_graph.py": "a8d3eb5b3a3923909c78fe737fb5caae5b9e71855ced72e8cf73f077ab8893e5",
+      "langgraph_metarec/graphs/restaurant_graph.py": "ee7652b3f37e5b51962e966bbd6fa3216fff748afa8fdb5a7645b571cfb95439"
+    },
+    "python": "3.11.4 (tags/v3.11.4:d2340ef, Jun  7 2023, 05:45:37) [MSC v.1934 64 bit (AMD64)]",
+    "safe_environment": {},
+    "synthetic_price_table": {
+      "stage2-model": {
+        "input": 2.0,
+        "output": 8.0
+      }
+    },
+    "live_provider_calls": false,
+    "external_api_calls": false,
+    "latency_measured": false
+  },
+  "workloads": [
+    {
+      "workload_id": "normal_recommendation_request",
+      "title": "Normal recommendation request",
+      "execution_level": "service-level",
+      "entrypoint": "MetaRecService.handle_user_request_async",
+      "fixture_id": "normal-restaurant-confirmation-v1",
+      "logical_llm_requests": 2,
+      "logical_requests_by_call_site": {
+        "intention.analyze": 1,
+        "confirmation.payload": 1
+      },
+      "physical_attempts": 2,
+      "physical_attempts_by_call_site": {
+        "intention.analyze": 1,
+        "confirmation.payload": 1
+      },
+      "visible_usage_events": 2,
+      "invisible_attempts": 0,
+      "retries_or_fallbacks": {
+        "retry_count": 0,
+        "fallbacks_observed": [],
+        "note": "No fault was injected; Stage 1 contains mechanism-level fault scenarios."
+      },
+      "usage": {
+        "prompt_tokens": 300,
+        "completion_tokens": 65,
+        "total_tokens": 365,
+        "cost_usd": 0.00112
+      },
+      "usage_events": [
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150,
+          "cost_usd": 0.00048
+        },
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 180,
+          "completion_tokens": 35,
+          "total_tokens": 215,
+          "cost_usd": 0.00064
+        }
+      ],
+      "llm_call_sites": [
+        {
+          "physical_attempt": 1,
+          "call_site": "intention.analyze",
+          "scope": "request",
+          "channel": "async",
+          "model": "stage2-model",
+          "temperature": 0.7,
+          "response_format": {
+            "type": "json_object"
+          },
+          "tool_names": [],
+          "message_roles": [
+            "system",
+            "user"
+          ],
+          "message_characters": 2898
+        },
+        {
+          "physical_attempt": 2,
+          "call_site": "confirmation.payload",
+          "scope": "request",
+          "channel": "async",
+          "model": "stage2-model",
+          "temperature": 0.8,
+          "response_format": {
+            "type": "json_object"
+          },
+          "tool_names": [],
+          "message_roles": [
+            "user"
+          ],
+          "message_characters": 1858
+        }
+      ],
+      "result_summary": {
+        "type": "confirmation",
+        "domain": "restaurant",
+        "routing_mode": "single_domain",
+        "task_created": false
+      },
+      "usage_flush_count": 1
+    },
+    {
+      "workload_id": "background_conversation_summary",
+      "title": "Background conversation summary",
+      "execution_level": "service-level",
+      "entrypoint": "MetaRecService.handle_user_request_async → _apply_conversation_summary",
+      "fixture_id": "eight-turn-summary-trigger-v1",
+      "logical_llm_requests": 2,
+      "logical_requests_by_call_site": {
+        "conversation.summary": 1,
+        "intention.analyze": 1
+      },
+      "physical_attempts": 2,
+      "physical_attempts_by_call_site": {
+        "conversation.summary": 1,
+        "intention.analyze": 1
+      },
+      "visible_usage_events": 2,
+      "invisible_attempts": 0,
+      "retries_or_fallbacks": {
+        "retry_count": 0,
+        "fallbacks_observed": [],
+        "note": "No fault was injected; Stage 1 contains mechanism-level fault scenarios."
+      },
+      "usage": {
+        "prompt_tokens": 280,
+        "completion_tokens": 70,
+        "total_tokens": 350,
+        "cost_usd": 0.00112
+      },
+      "usage_events": [
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 160,
+          "completion_tokens": 40,
+          "total_tokens": 200,
+          "cost_usd": 0.00064
+        },
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150,
+          "cost_usd": 0.00048
+        }
+      ],
+      "llm_call_sites": [
+        {
+          "physical_attempt": 1,
+          "call_site": "conversation.summary",
+          "scope": "background",
+          "channel": "async",
+          "model": "stage2-model",
+          "temperature": 0.3,
+          "response_format": null,
+          "tool_names": [],
+          "message_roles": [
+            "system",
+            "user"
+          ],
+          "message_characters": 884
+        },
+        {
+          "physical_attempt": 2,
+          "call_site": "intention.analyze",
+          "scope": "request",
+          "channel": "async",
+          "model": "stage2-model",
+          "temperature": 0.7,
+          "response_format": {
+            "type": "json_object"
+          },
+          "tool_names": [],
+          "message_roles": [
+            "system",
+            "user"
+          ],
+          "message_characters": 3607
+        }
+      ],
+      "result_summary": {
+        "type": "llm_reply",
+        "summary_update_persisted": true,
+        "summary_watermark": "m2"
+      },
+      "usage_flush_count": 2,
+      "usage_flush_scopes": [
+        "request",
+        "background"
+      ]
+    },
+    {
+      "workload_id": "sparse_generic_recommendation_task",
+      "title": "Sparse generic recommendation task",
+      "execution_level": "graph-level",
+      "entrypoint": "run_generic_domain_graph",
+      "fixture_id": "one-candidate-stop-reasoner-v1",
+      "logical_llm_requests": 1,
+      "logical_requests_by_call_site": {
+        "generic.gather_reasoner": 1
+      },
+      "physical_attempts": 1,
+      "physical_attempts_by_call_site": {
+        "generic.gather_reasoner": 1
+      },
+      "visible_usage_events": 1,
+      "invisible_attempts": 0,
+      "retries_or_fallbacks": {
+        "retry_count": 0,
+        "fallbacks_observed": [],
+        "note": "No fault was injected; Stage 1 contains mechanism-level fault scenarios."
+      },
+      "usage": {
+        "prompt_tokens": 140,
+        "completion_tokens": 25,
+        "total_tokens": 165,
+        "cost_usd": 0.00048
+      },
+      "usage_events": [
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 140,
+          "completion_tokens": 25,
+          "total_tokens": 165,
+          "cost_usd": 0.00048
+        }
+      ],
+      "llm_call_sites": [
+        {
+          "physical_attempt": 1,
+          "call_site": "generic.gather_reasoner",
+          "scope": "task",
+          "channel": "async",
+          "model": "stage2-model",
+          "temperature": 0.2,
+          "response_format": null,
+          "tool_names": [],
+          "message_roles": [
+            "system",
+            "user"
+          ],
+          "message_characters": 1045
+        }
+      ],
+      "result_summary": {
+        "domain": "attraction",
+        "selected_tools": [
+          "gmap.attraction.search"
+        ],
+        "candidate_count": 1,
+        "gather_iterations": 1,
+        "items_count": 1
+      },
+      "external_tool_calls": 0
+    },
+    {
+      "workload_id": "restaurant_planning_and_summary",
+      "title": "Restaurant planning plus summarization",
+      "execution_level": "graph-level",
+      "entrypoint": "run_restaurant_graph",
+      "fixture_id": "single-gmap-success-v1",
+      "logical_llm_requests": 2,
+      "logical_requests_by_call_site": {
+        "restaurant.plan": 1,
+        "restaurant.summary": 1
+      },
+      "physical_attempts": 2,
+      "physical_attempts_by_call_site": {
+        "restaurant.plan": 1,
+        "restaurant.summary": 1
+      },
+      "visible_usage_events": 2,
+      "invisible_attempts": 0,
+      "retries_or_fallbacks": {
+        "retry_count": 0,
+        "fallbacks_observed": [],
+        "note": "No fault was injected; Stage 1 contains mechanism-level fault scenarios."
+      },
+      "usage": {
+        "prompt_tokens": 480,
+        "completion_tokens": 120,
+        "total_tokens": 600,
+        "cost_usd": 0.00192
+      },
+      "usage_events": [
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 220,
+          "completion_tokens": 45,
+          "total_tokens": 265,
+          "cost_usd": 0.0008
+        },
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 260,
+          "completion_tokens": 75,
+          "total_tokens": 335,
+          "cost_usd": 0.00112
+        }
+      ],
+      "llm_call_sites": [
+        {
+          "physical_attempt": 1,
+          "call_site": "restaurant.plan",
+          "scope": "task",
+          "channel": "sync",
+          "model": "stage2-model",
+          "temperature": 0.2,
+          "response_format": null,
+          "tool_names": [
+            "gmap_search",
+            "yelp_search",
+            "xhs_search"
+          ],
+          "message_roles": [
+            "system",
+            "user"
+          ],
+          "message_characters": 1439
+        },
+        {
+          "physical_attempt": 2,
+          "call_site": "restaurant.summary",
+          "scope": "task",
+          "channel": "sync",
+          "model": "stage2-model",
+          "temperature": 1,
+          "response_format": null,
+          "tool_names": [],
+          "message_roles": [
+            "system",
+            "user"
+          ],
+          "message_characters": 2213
+        }
+      ],
+      "result_summary": {
+        "graph": "restaurant_graph",
+        "plan_calls": 1,
+        "executions": 1,
+        "checked_restaurants": 1,
+        "refine_used": false
+      },
+      "external_tool_calls": 0
+    },
+    {
+      "workload_id": "initial_itinerary_constraint_confirmation",
+      "title": "Initial itinerary constraint extraction plus confirmation",
+      "execution_level": "service-level",
+      "entrypoint": "MetaRecService.handle_user_request_async → request orchestrator",
+      "fixture_id": "unanchored-sentosa-confirmation-v1",
+      "logical_llm_requests": 2,
+      "logical_requests_by_call_site": {
+        "intention.analyze": 1,
+        "itinerary.constraints": 1
+      },
+      "physical_attempts": 2,
+      "physical_attempts_by_call_site": {
+        "intention.analyze": 1,
+        "itinerary.constraints": 1
+      },
+      "visible_usage_events": 2,
+      "invisible_attempts": 0,
+      "retries_or_fallbacks": {
+        "retry_count": 0,
+        "fallbacks_observed": [],
+        "note": "No fault was injected; Stage 1 contains mechanism-level fault scenarios."
+      },
+      "usage": {
+        "prompt_tokens": 340,
+        "completion_tokens": 80,
+        "total_tokens": 420,
+        "cost_usd": 0.00132
+      },
+      "usage_events": [
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150,
+          "cost_usd": 0.00048
+        },
+        {
+          "model": "stage2-model",
+          "prompt_tokens": 220,
+          "completion_tokens": 50,
+          "total_tokens": 270,
+          "cost_usd": 0.00084
+        }
+      ],
+      "llm_call_sites": [
+        {
+          "physical_attempt": 1,
+          "call_site": "intention.analyze",
+          "scope": "request",
+          "channel": "async",
+          "model": "stage2-model",
+          "temperature": 0.7,
+          "response_format": {
+            "type": "json_object"
+          },
+          "tool_names": [],
+          "message_roles": [
+            "system",
+            "user"
+          ],
+          "message_characters": 2889
+        },
+        {
+          "physical_attempt": 2,
+          "call_site": "itinerary.constraints",
+          "scope": "request",
+          "channel": "async",
+          "model": "stage2-model",
+          "temperature": 0.1,
+          "response_format": {
+            "type": "json_object"
+          },
+          "tool_names": [],
+          "message_roles": [
+            "system",
+            "user"
+          ],
+          "message_characters": 1236
+        }
+      ],
+      "result_summary": {
+        "type": "confirmation",
+        "routing_mode": "itinerary",
+        "confirmation_present": true,
+        "task_created": false
+      },
+      "usage_flush_count": 1,
+      "complete_itinerary_execution": false
+    }
+  ],
+  "aggregate": {
+    "workload_count": 5,
+    "logical_llm_requests": 9,
+    "physical_attempts": 9,
+    "visible_usage_events": 9,
+    "invisible_attempts": 0,
+    "prompt_tokens": 1540,
+    "completion_tokens": 360,
+    "total_tokens": 1900,
+    "cost_usd": 0.00596
+  }
+}
