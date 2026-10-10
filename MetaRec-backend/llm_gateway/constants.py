@@ -1,0 +1,206 @@
+"""Centralized constants, enums, and default configurations for the LLM Gateway.
+
+Replaces scattered magic numbers and strings across adapters, engine, contracts,
+and registries with descriptive, strongly-typed constants and enums.
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+
+
+# ---------------------------------------------------------------------------
+# Provider & Adapter Identifiers
+# ---------------------------------------------------------------------------
+
+class ProviderId(str, Enum):
+    """Canonical provider IDs supported by the gateway."""
+    FAKE = "fake_provider"
+    GROQ = "groq"
+    AZURE_OPENAI = "azure_openai"
+    OPENAI = "openai"
+    OPENAI_BASE = "openai_base"
+    ANTHROPIC = "anthropic"
+
+
+class AdapterKind(str, Enum):
+    """Underlying adapter implementation family."""
+    FAKE = "fake"
+    OPENAI_COMPATIBLE = "openai_compatible"
+    AZURE_OPENAI = "azure_openai"
+    OPENAI_BASE = "openai_base"
+    OPENAI_HTTP = "openai_http"
+    ANTHROPIC = "anthropic"
+
+
+class CredentialStatus(str, Enum):
+    """Lifecycle / readiness state of provider credentials."""
+    READY = "ready"
+    MISSING = "missing"
+    INVALID = "invalid"
+    UNCHECKED = "unchecked"
+
+
+# ---------------------------------------------------------------------------
+# Error Codes & Reasons
+# ---------------------------------------------------------------------------
+
+class GatewayErrorCode(str, Enum):
+    """Standardized error taxonomy code strings."""
+    RATE_LIMITED = "rate_limited"
+    TIMEOUT = "timeout"
+    CONNECT_ERROR = "connect_error"
+    PROVIDER_5XX = "provider_5xx"
+    UNSUPPORTED_PARAMETER = "unsupported_parameter"
+    AUTH_FAILED = "auth_failed"
+    INVALID_REQUEST = "invalid_request"
+    PROVIDER_ERROR = "provider_error"
+    VALIDATION_FAILED = "validation_failed"
+    DEADLINE_EXHAUSTED = "deadline_exhausted"
+    ATTEMPT_BUDGET_EXHAUSTED = "attempt_budget_exhausted"
+    COST_BUDGET_EXHAUSTED = "cost_budget_exhausted"
+    CONFIGURATION_ERROR = "configuration_error"
+    UNKNOWN_FAILURE = "unknown_failure"
+    KILL_SWITCH_ACTIVE = "kill_switch_active"
+
+
+class DegradationReason(str, Enum):
+    """Reasons why execution degraded to fallback policy legs."""
+    FALLBACK_ROUTE_USED = "fallback_route_used"
+
+
+# ---------------------------------------------------------------------------
+# Semantic Validator Identifiers
+# ---------------------------------------------------------------------------
+
+class SemanticValidatorId(str, Enum):
+    """Built-in registered semantic validator IDs."""
+    NONE = "none"
+    GATHER_ACTION = "gather_action.v1"
+    CONFIRMATION_PAYLOAD = "confirmation_payload.v1"
+
+
+# ---------------------------------------------------------------------------
+# HTTP Status Codes & Status Classes
+# ---------------------------------------------------------------------------
+
+HTTP_STATUS_OK: int = 200
+HTTP_STATUS_BAD_REQUEST: int = 400
+HTTP_STATUS_UNAUTHORIZED: int = 401
+HTTP_STATUS_FORBIDDEN: int = 403
+HTTP_STATUS_TOO_MANY_REQUESTS: int = 429
+HTTP_STATUS_INTERNAL_SERVER_ERROR: int = 500
+HTTP_STATUS_BAD_GATEWAY: int = 502
+HTTP_STATUS_SERVICE_UNAVAILABLE: int = 503
+HTTP_STATUS_GATEWAY_TIMEOUT: int = 504
+HTTP_STATUS_ANTHROPIC_OVERLOADED: int = 529
+
+RETRYABLE_HTTP_STATUSES: tuple[int, ...] = (
+    HTTP_STATUS_TOO_MANY_REQUESTS,
+    HTTP_STATUS_INTERNAL_SERVER_ERROR,
+    HTTP_STATUS_BAD_GATEWAY,
+    HTTP_STATUS_SERVICE_UNAVAILABLE,
+    HTTP_STATUS_GATEWAY_TIMEOUT,
+    HTTP_STATUS_ANTHROPIC_OVERLOADED,
+)
+
+AUTH_HTTP_STATUSES: tuple[int, ...] = (
+    HTTP_STATUS_UNAUTHORIZED,
+    HTTP_STATUS_FORBIDDEN,
+)
+
+
+# ---------------------------------------------------------------------------
+# Conversion & Mathematical Constants
+# ---------------------------------------------------------------------------
+
+TOKENS_PER_MILLION: float = 1_000_000.0
+MS_PER_SECOND: float = 1000.0
+
+
+# ---------------------------------------------------------------------------
+# Budget & Generation Default Numbers
+# ---------------------------------------------------------------------------
+
+DEFAULT_GENERATION_MAX_OUTPUT_TOKENS: int = 1024
+DEFAULT_BUDGET_DEADLINE_MS: int = 30000
+DEFAULT_BUDGET_MAX_PHYSICAL_ATTEMPTS: int = 3
+DEFAULT_BUDGET_MAX_OUTPUT_TOKENS: int = 2048
+DEFAULT_BUDGET_MAX_COST_USD: float = 0.50
+
+DEFAULT_MODEL_CONTEXT_WINDOW: int = 128000
+DEFAULT_MODEL_MAX_OUTPUT_TOKENS: int = 4096
+
+DEFAULT_CONNECT_TIMEOUT_SECONDS: float = 10.0
+DEFAULT_READ_TIMEOUT_SECONDS: float = 30.0
+DEFAULT_MAX_CONCURRENCY: int = 20
+DEFAULT_SDK_RETRIES: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Back-off and Retry Constants
+# ---------------------------------------------------------------------------
+
+DEFAULT_BACKOFF_BASE_MS: float = 200.0
+DEFAULT_BACKOFF_CAP_MS: float = 5000.0
+DEFAULT_MAX_ATTEMPTS_PER_ROUTE: int = 2
+
+
+# ---------------------------------------------------------------------------
+# Schema Versions, Snapshots & Metadata
+# ---------------------------------------------------------------------------
+
+SCHEMA_VERSION_LLM_REQUEST: str = "llm-request.v1"
+SCHEMA_VERSION_LLM_RESULT: str = "llm-result.v1"
+SCHEMA_VERSION_PROVIDER_CAPABILITY: str = "llm-provider-capability.v1"
+
+DEFAULT_PRICING_SNAPSHOT_ID: str = "default-pricing-v1"
+DEFAULT_PRICE_TABLE_VERSION: str = "pricing-2026-v1"
+DEFAULT_TEXT_SCHEMA_ID: str = "default.text.v1"
+DEFAULT_HEALTH_SNAPSHOT_ID: str = "health-v1"
+DEFAULT_CURRENCY: str = "USD"
+
+DEFAULT_DATA_CLASS: str = "standard"
+DEFAULT_SAFETY_CLASS: str = "standard"
+DEFAULT_PRODUCER_ID: str = "default_producer"
+DEFAULT_CONTEXT_VERSION: str = "1.0.0"
+DEFAULT_TOOL_NAME_PATTERN: str = r"^[a-zA-Z0-9_-]+$"
+DEFAULT_KILL_SWITCH_REASON: str = "Manual override"
+
+
+
+# ---------------------------------------------------------------------------
+# Endpoint & Remote Catalog Defaults
+# ---------------------------------------------------------------------------
+
+DEFAULT_OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+DEFAULT_GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+DEFAULT_AZURE_API_VERSION: str = "2024-12-01-preview"
+DEFAULT_ANTHROPIC_BASE_URL: str = "https://api.anthropic.com"
+DEFAULT_ANTHROPIC_VERSION: str = "2023-06-01"
+DEFAULT_LITELLM_CATALOG_URL: str = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+)
+
+
+# ---------------------------------------------------------------------------
+# Policy Tags
+# ---------------------------------------------------------------------------
+
+POLICY_TAG_CONVERSATION_SUMMARY: str = "conversation.summary"
+POLICY_TAG_CONFIRMATION_PAYLOAD: str = "confirmation.payload"
+CHEAP_ROUTE_ELIGIBLE_TAGS: frozenset[str] = frozenset({
+    POLICY_TAG_CONVERSATION_SUMMARY,
+    POLICY_TAG_CONFIRMATION_PAYLOAD,
+})
+
+
+# ---------------------------------------------------------------------------
+# Fake Adapter Deterministic Defaults
+# ---------------------------------------------------------------------------
+
+DEFAULT_FAKE_PROMPT_TOKENS: int = 40
+DEFAULT_FAKE_COMPLETION_TOKENS: int = 20
+DEFAULT_SCRIPTED_PROMPT_TOKENS: int = 50
+DEFAULT_SCRIPTED_COMPLETION_TOKENS: int = 25
+DEFAULT_SCRIPTED_REQUEST_ID: str = "fake-req-001"

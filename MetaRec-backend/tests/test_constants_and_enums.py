@@ -1,0 +1,190 @@
+"""Unit tests for LLM Gateway constants, enums, and centralized configuration."""
+
+from __future__ import annotations
+
+import pytest
+
+from llm_gateway import (
+    AdapterKind,
+    BudgetConfigV1,
+    ConfigurationError,
+    CredentialStatus,
+    DegradationReason,
+    GatewayErrorCode,
+    GenerationConfigV1,
+    LLMRequestV1,
+    MessageV1,
+    OutputPayloadV1,
+    PhysicalAttemptV1,
+    PolicyContextV1,
+    PolicyLeg,
+    PricingSnapshotV1,
+    ProviderCapabilityV1,
+    ProviderId,
+    RequestMode,
+    RequestRole,
+    ResponseContractV1,
+    ResponseKind,
+    ResultStatus,
+    RouteV1,
+    RoutingMode,
+    RoutingPolicyV1,
+    SemanticValidatorId,
+    get_gateway_engine,
+    get_provider_registry,
+    invoke_llm,
+)
+from llm_gateway.constants import (
+    AUTH_HTTP_STATUSES,
+    DEFAULT_BACKOFF_BASE_MS,
+    DEFAULT_BACKOFF_CAP_MS,
+    DEFAULT_BUDGET_DEADLINE_MS,
+    DEFAULT_BUDGET_MAX_COST_USD,
+    DEFAULT_BUDGET_MAX_OUTPUT_TOKENS,
+    DEFAULT_BUDGET_MAX_PHYSICAL_ATTEMPTS,
+    DEFAULT_GENERATION_MAX_OUTPUT_TOKENS,
+    DEFAULT_KILL_SWITCH_REASON,
+    DEFAULT_MAX_ATTEMPTS_PER_ROUTE,
+    DEFAULT_MODEL_CONTEXT_WINDOW,
+    DEFAULT_MODEL_MAX_OUTPUT_TOKENS,
+    DEFAULT_PRICING_SNAPSHOT_ID,
+    HTTP_STATUS_BAD_REQUEST,
+    HTTP_STATUS_FORBIDDEN,
+    HTTP_STATUS_INTERNAL_SERVER_ERROR,
+    HTTP_STATUS_OK,
+    HTTP_STATUS_TOO_MANY_REQUESTS,
+    HTTP_STATUS_UNAUTHORIZED,
+    MS_PER_SECOND,
+    RETRYABLE_HTTP_STATUSES,
+    TOKENS_PER_MILLION,
+)
+from llm_gateway.kill_switch import (
+    KillSwitchManager,
+    get_kill_switch_reason,
+    is_kill_switch_active,
+    set_kill_switch,
+)
+
+pytestmark = pytest.mark.backend_unit
+
+
+def test_provider_id_enum_and_string_compatibility():
+    """ProviderId enums must evaluate equal to raw strings for backwards compatibility."""
+    assert ProviderId.FAKE == "fake_provider"
+    assert ProviderId.GROQ == "groq"
+    assert ProviderId.AZURE_OPENAI == "azure_openai"
+    assert ProviderId.OPENAI == "openai"
+    assert ProviderId.OPENAI_BASE == "openai_base"
+    assert ProviderId.ANTHROPIC == "anthropic"
+
+    assert isinstance(ProviderId.FAKE, str)
+    assert ProviderId("fake_provider") == ProviderId.FAKE
+
+
+def test_adapter_kind_enum():
+    """AdapterKind enums must match expected adapter identifiers."""
+    assert AdapterKind.FAKE == "fake"
+    assert AdapterKind.OPENAI_COMPATIBLE == "openai_compatible"
+    assert AdapterKind.AZURE_OPENAI == "azure_openai"
+    assert AdapterKind.OPENAI_BASE == "openai_base"
+    assert AdapterKind.OPENAI_HTTP == "openai_http"
+    assert AdapterKind.ANTHROPIC == "anthropic"
+
+
+def test_credential_status_enum():
+    """CredentialStatus enums must match provider readiness states."""
+    assert CredentialStatus.READY == "ready"
+    assert CredentialStatus.MISSING == "missing"
+    assert CredentialStatus.INVALID == "invalid"
+    assert CredentialStatus.UNCHECKED == "unchecked"
+
+
+def test_gateway_error_codes():
+    """GatewayErrorCode enums must match error taxonomy and be string-compatible."""
+    assert GatewayErrorCode.RATE_LIMITED == "rate_limited"
+    assert GatewayErrorCode.TIMEOUT == "timeout"
+    assert GatewayErrorCode.CONNECT_ERROR == "connect_error"
+    assert GatewayErrorCode.PROVIDER_5XX == "provider_5xx"
+    assert GatewayErrorCode.UNSUPPORTED_PARAMETER == "unsupported_parameter"
+    assert GatewayErrorCode.AUTH_FAILED == "auth_failed"
+    assert GatewayErrorCode.INVALID_REQUEST == "invalid_request"
+    assert GatewayErrorCode.PROVIDER_ERROR == "provider_error"
+    assert GatewayErrorCode.VALIDATION_FAILED == "validation_failed"
+    assert GatewayErrorCode.DEADLINE_EXHAUSTED == "deadline_exhausted"
+    assert GatewayErrorCode.ATTEMPT_BUDGET_EXHAUSTED == "attempt_budget_exhausted"
+    assert GatewayErrorCode.COST_BUDGET_EXHAUSTED == "cost_budget_exhausted"
+    assert GatewayErrorCode.CONFIGURATION_ERROR == "configuration_error"
+    assert GatewayErrorCode.UNKNOWN_FAILURE == "unknown_failure"
+
+
+def test_degradation_and_validator_enums():
+    """Degradation reasons and semantic validator IDs must match system defaults."""
+    assert DegradationReason.FALLBACK_ROUTE_USED == "fallback_route_used"
+    assert SemanticValidatorId.NONE == "none"
+    assert SemanticValidatorId.GATHER_ACTION == "gather_action.v1"
+    assert SemanticValidatorId.CONFIRMATION_PAYLOAD == "confirmation_payload.v1"
+
+
+def test_configuration_error_exception():
+    """ConfigurationError should be a ProviderError with CONFIGURATION_ERROR code."""
+    err = ConfigurationError("Azure endpoint missing")
+    assert err.code == GatewayErrorCode.CONFIGURATION_ERROR.value
+    assert err.retryable is False
+    assert "Azure endpoint missing" in str(err)
+    err_dict = err.to_dict()
+    assert err_dict["code"] == "configuration_error"
+    assert err_dict["error_class"] == "provider"
+
+
+def test_http_status_constants():
+    """HTTP status codes and category groupings must be consistent."""
+    assert HTTP_STATUS_OK == 200
+    assert HTTP_STATUS_BAD_REQUEST == 400
+    assert HTTP_STATUS_UNAUTHORIZED == 401
+    assert HTTP_STATUS_FORBIDDEN == 403
+    assert HTTP_STATUS_TOO_MANY_REQUESTS == 429
+    assert HTTP_STATUS_INTERNAL_SERVER_ERROR == 500
+
+    assert HTTP_STATUS_TOO_MANY_REQUESTS in RETRYABLE_HTTP_STATUSES
+    assert HTTP_STATUS_INTERNAL_SERVER_ERROR in RETRYABLE_HTTP_STATUSES
+    assert 529 in RETRYABLE_HTTP_STATUSES
+
+    assert HTTP_STATUS_UNAUTHORIZED in AUTH_HTTP_STATUSES
+    assert HTTP_STATUS_FORBIDDEN in AUTH_HTTP_STATUSES
+
+
+def test_contract_defaults_use_constants():
+    """Default values in contract models must match centralized constants."""
+    budget = BudgetConfigV1()
+    assert budget.deadline_ms == DEFAULT_BUDGET_DEADLINE_MS
+    assert budget.max_physical_attempts == DEFAULT_BUDGET_MAX_PHYSICAL_ATTEMPTS
+    assert budget.max_output_tokens == DEFAULT_BUDGET_MAX_OUTPUT_TOKENS
+    assert budget.max_cost_usd == DEFAULT_BUDGET_MAX_COST_USD
+
+    gen = GenerationConfigV1()
+    assert gen.max_output_tokens == DEFAULT_GENERATION_MAX_OUTPUT_TOKENS
+
+    resp = ResponseContractV1()
+    assert resp.semantic_validator_id == SemanticValidatorId.NONE.value
+
+
+def test_token_math_and_pricing_calculation():
+    """Pricing calculation must accurately use TOKENS_PER_MILLION divisor."""
+    assert TOKENS_PER_MILLION == 1_000_000.0
+    assert MS_PER_SECOND == 1000.0
+
+    registry = get_provider_registry()
+    snap = registry.get_pricing_snapshot(DEFAULT_PRICING_SNAPSHOT_ID)
+    # fake-fast is $0.10 input / 1M, $0.20 output / 1M
+    cost = snap.calculate_cost_usd("fake_provider", "fake-fast", prompt_tokens=1_000_000, completion_tokens=1_000_000)
+    assert cost == pytest.approx(0.30, rel=1e-5)
+
+
+def test_kill_switch_default_reason():
+    """KillSwitch should use DEFAULT_KILL_SWITCH_REASON when reason is omitted."""
+    set_kill_switch(True)
+    try:
+        assert is_kill_switch_active() is True
+        assert get_kill_switch_reason() == DEFAULT_KILL_SWITCH_REASON
+    finally:
+        set_kill_switch(False)
