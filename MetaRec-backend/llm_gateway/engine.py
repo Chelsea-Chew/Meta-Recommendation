@@ -64,6 +64,7 @@ from llm_gateway.contracts import (
     AttemptKind,
     AttemptOutcome,
     DegradationSummaryV1,
+    LLMErrorPayloadV1,
     LLMRequestV1,
     LLMResultV1,
     OutputPayloadV1,
@@ -77,6 +78,7 @@ from llm_gateway.contracts import (
     TimingSummaryV1,
     ToolCallOutputV1,
     UsageSummaryV1,
+    ValidationGateResultV1,
     ValidationGateStatus,
     ValidationSummaryV1,
 )
@@ -331,15 +333,29 @@ class GatewayEngine:
         resp: Optional[RawAdapterResponse] = None,
         error: Optional[Exception] = None,
         applied_changes: Optional[List[str]] = None,
+        validation_summary: Optional[ValidationSummaryV1] = None,
     ) -> PhysicalAttemptV1:
         """Create a PhysicalAttemptV1 record and record in usage ledger."""
         attempt_id = f"att-{uuid.uuid4().hex[:12]}"
         pricing = self.registry.get_pricing_snapshot(request.pricing_snapshot_id)
+        ended_at = started_at + (latency_ms / MS_PER_SECOND)
 
-        p_tokens = resp.prompt_tokens if resp else getattr(error, "prompt_tokens", 0)
-        c_tokens = resp.completion_tokens if resp else getattr(error, "completion_tokens", 0)
-        t_tokens = resp.total_tokens if resp else (p_tokens + c_tokens)
-        cost_usd = pricing.calculate_cost_usd(route.provider_id, route.model_id, p_tokens, c_tokens)
+        # Distinguish missing usage (None) vs explicitly reported 0
+        if resp is not None:
+            p_tokens = resp.prompt_tokens
+            c_tokens = resp.completion_tokens
+            t_tokens = resp.total_tokens
+            is_usage_reported = resp.is_usage_reported if (p_tokens is not None) else False
+        else:
+            p_tokens = getattr(error, "prompt_tokens", None)
+            c_tokens = getattr(error, "completion_tokens", None)
+            t_tokens = getattr(error, "total_tokens", None)
+            is_usage_reported = p_tokens is not None
+
+        if is_usage_reported and p_tokens is not None and c_tokens is not None:
+            cost_usd = pricing.calculate_cost_usd(route.provider_id, route.model_id, p_tokens, c_tokens)
+        else:
+            cost_usd = 0.0
 
         error_code = None
         error_msg = None
@@ -356,36 +372,39 @@ class GatewayEngine:
             policy_leg=leg,
             attempt_kind=attempt_kind,
             started_at_utc=started_at,
+            ended_at_utc=round(ended_at, 6),
             latency_ms=round(latency_ms, 2),
             outcome=outcome,
             http_status=resp.http_status if resp else (HTTP_STATUS_INTERNAL_SERVER_ERROR if error else HTTP_STATUS_OK),
             provider_request_id=resp.provider_request_id if resp else None,
-
             prompt_tokens=p_tokens,
             completion_tokens=c_tokens,
             total_tokens=t_tokens,
+            is_usage_reported=is_usage_reported,
             cost_usd=cost_usd,
             price_table_version=pricing.pricing_snapshot_id,
             applied_compatibility_changes=applied_changes or [],
             error_code=error_code,
             error_message=error_msg,
+            validation_summary=validation_summary,
         )
 
-        # Update llm_usage ledger if present
-        try:
-            from llm_usage import UsageEvent, current_ledger
-            ledger = current_ledger()
-            if ledger is not None:
-                event = UsageEvent(
-                    model=route.model_id,
-                    prompt_tokens=p_tokens,
-                    completion_tokens=c_tokens,
-                    total_tokens=t_tokens,
-                    cost_usd=cost_usd,
-                )
-                ledger.add(event)
-        except Exception as exc:
-            logger.debug("Could not record to llm_usage ledger: %s", exc)
+        # Update llm_usage ledger if present and usage was reported
+        if is_usage_reported and p_tokens is not None and c_tokens is not None:
+            try:
+                from llm_usage import UsageEvent, current_ledger
+                ledger = current_ledger()
+                if ledger is not None:
+                    event = UsageEvent(
+                        model=route.model_id,
+                        prompt_tokens=p_tokens,
+                        completion_tokens=c_tokens,
+                        total_tokens=t_tokens or (p_tokens + c_tokens),
+                        cost_usd=cost_usd,
+                    )
+                    ledger.add(event)
+            except Exception as exc:
+                logger.debug("Could not record to llm_usage ledger: %s", exc)
 
         return attempt
 
@@ -400,13 +419,17 @@ class GatewayEngine:
         else:
             logger.debug("%s [req=%s]: [REDACTED – prompt logging disabled]", label, request.request_id)
 
-    def _validate_output(
+    def _validate_output_gate(
         self,
         request: LLMRequestV1,
         resp: RawAdapterResponse,
         sanitized_mapping: Dict[str, str],
-    ) -> Tuple[ValidationSummaryV1, Optional[OutputPayloadV1]]:
+        external_validator: Optional[Any] = None,
+    ) -> ValidationGateResultV1:
         """Validate raw response against JSON, JSON Schema, and Semantic Validators."""
+        if external_validator is not None:
+            return external_validator(request, resp, sanitized_mapping)
+
         contract = request.response_contract
         val_summary = ValidationSummaryV1(validator_id=contract.semantic_validator_id)
         raw_text = resp.text or ""
@@ -415,9 +438,9 @@ class GatewayEngine:
         if contract.kind == ResponseKind.TEXT:
             if not raw_text and not contract.allow_empty:
                 val_summary.errors.append("Empty text response not allowed")
-                return val_summary, None
+                return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
             output = OutputPayloadV1(kind=ResponseKind.TEXT, text=raw_text)
-            return val_summary, output
+            return ValidationGateResultV1(passed=True, summary=val_summary, payload=output)
 
         # Handle TOOL_CALLS response
         if contract.kind == ResponseKind.TOOL_CALLS:
@@ -433,7 +456,7 @@ class GatewayEngine:
                     if orig_name not in catalog_tool_names:
                         val_summary.errors.append(f"Tool '{orig_name}' not in scoped catalog")
                         val_summary.semantic = ValidationGateStatus.FAILED
-                        return val_summary, None
+                        return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
 
                 # Parse arguments
                 raw_args = fn.get("arguments", "{}")
@@ -442,7 +465,7 @@ class GatewayEngine:
                 except Exception as e:
                     val_summary.errors.append(f"Malformed tool arguments JSON: {e}")
                     val_summary.json_parse = ValidationGateStatus.FAILED
-                    return val_summary, None
+                    return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
 
                 out_tool_calls.append(
                     ToolCallOutputV1(id=tc.get("id", "call_1"), name=orig_name, arguments=parsed_args)
@@ -451,7 +474,7 @@ class GatewayEngine:
             val_summary.json_parse = ValidationGateStatus.PASSED
             val_summary.semantic = ValidationGateStatus.PASSED
             output = OutputPayloadV1(kind=ResponseKind.TOOL_CALLS, text=raw_text, tool_calls=out_tool_calls)
-            return val_summary, output
+            return ValidationGateResultV1(passed=True, summary=val_summary, payload=output)
 
         # Handle JSON response
         if contract.kind == ResponseKind.JSON:
@@ -459,15 +482,15 @@ class GatewayEngine:
             if not ok:
                 val_summary.json_parse = ValidationGateStatus.FAILED
                 val_summary.errors.append(err or "Malformed JSON")
-                return val_summary, None
+                return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
             val_summary.json_parse = ValidationGateStatus.PASSED
 
-            # JSON Schema Validation (Fix #1: now full Draft-7 via jsonschema)
+            # JSON Schema Validation (Draft-7 via jsonschema)
             schema_ok, schema_errs = validate_json_schema(parsed_json, contract.json_schema)
             if not schema_ok:
                 val_summary.json_schema = ValidationGateStatus.FAILED
                 val_summary.errors.extend(schema_errs)
-                return val_summary, None
+                return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
             val_summary.json_schema = ValidationGateStatus.PASSED
 
             # Semantic Validation
@@ -477,13 +500,23 @@ class GatewayEngine:
                 if not sem_ok:
                     val_summary.semantic = ValidationGateStatus.FAILED
                     val_summary.errors.extend(sem_errs)
-                    return val_summary, None
+                    return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
                 val_summary.semantic = ValidationGateStatus.PASSED
 
             output = OutputPayloadV1(kind=ResponseKind.JSON, text=raw_text, json=parsed_json)
-            return val_summary, output
+            return ValidationGateResultV1(passed=True, summary=val_summary, payload=output)
 
-        return val_summary, None
+        return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
+
+    def _validate_output(
+        self,
+        request: LLMRequestV1,
+        resp: RawAdapterResponse,
+        sanitized_mapping: Dict[str, str],
+    ) -> Tuple[ValidationSummaryV1, Optional[OutputPayloadV1]]:
+        """Backwards-compatible wrapper delegating to _validate_output_gate."""
+        gate_res = self._validate_output_gate(request, resp, sanitized_mapping)
+        return gate_res.summary, gate_res.payload
 
     # ── Core execution: shared attempt-loop logic ────────────────────────────
 
@@ -539,6 +572,14 @@ class GatewayEngine:
                     )
                     break
 
+                total_tokens_so_far = sum(a.total_tokens for a in attempts if a.total_tokens is not None)
+                if request.budget.max_total_tokens and total_tokens_so_far >= request.budget.max_total_tokens:
+                    last_error = BudgetExhaustedError(
+                        GatewayErrorCode.TOKEN_BUDGET_EXHAUSTED.value,
+                        f"Max total tokens budget {request.budget.max_total_tokens} exceeded (consumed {total_tokens_so_far})",
+                    )
+                    break
+
                 attempt_count += 1
                 route_attempts += 1
                 att_kind = AttemptKind.INITIAL if attempt_count == 1 else (
@@ -566,7 +607,8 @@ class GatewayEngine:
                     if out_payload is not None:
                         attempt = self._record_attempt(
                             request, route, leg, attempt_count, att_kind, att_start_utc, lat_ms,
-                            AttemptOutcome.SUCCESS, resp=raw_resp, applied_changes=adaptations.get("removed_params")
+                            AttemptOutcome.SUCCESS, resp=raw_resp, applied_changes=adaptations.get("removed_params"),
+                            validation_summary=val_summary,
                         )
                         attempts.append(attempt)
                         selected_route = route
@@ -580,7 +622,8 @@ class GatewayEngine:
                         val_err = OutputValidationError(GatewayErrorCode.VALIDATION_FAILED.value, f"Validation errors: {val_summary.errors}")
                         attempt = self._record_attempt(
                             request, route, leg, attempt_count, att_kind, att_start_utc, lat_ms,
-                            AttemptOutcome.VALIDATION_ERROR, resp=raw_resp, error=val_err
+                            AttemptOutcome.VALIDATION_ERROR, resp=raw_resp, error=val_err,
+                            validation_summary=val_summary,
                         )
                         attempts.append(attempt)
                         last_error = val_err
@@ -685,6 +728,14 @@ class GatewayEngine:
                     )
                     break
 
+                total_tokens_so_far = sum(a.total_tokens for a in attempts if a.total_tokens is not None)
+                if request.budget.max_total_tokens and total_tokens_so_far >= request.budget.max_total_tokens:
+                    last_error = BudgetExhaustedError(
+                        GatewayErrorCode.TOKEN_BUDGET_EXHAUSTED.value,
+                        f"Max total tokens budget {request.budget.max_total_tokens} exceeded (consumed {total_tokens_so_far})",
+                    )
+                    break
+
                 attempt_count += 1
                 route_attempts += 1
                 att_kind = AttemptKind.INITIAL if attempt_count == 1 else (
@@ -710,7 +761,8 @@ class GatewayEngine:
                     if out_payload is not None:
                         attempt = self._record_attempt(
                             request, route, leg, attempt_count, att_kind, att_start_utc, lat_ms,
-                            AttemptOutcome.SUCCESS, resp=raw_resp, applied_changes=adaptations.get("removed_params")
+                            AttemptOutcome.SUCCESS, resp=raw_resp, applied_changes=adaptations.get("removed_params"),
+                            validation_summary=val_summary,
                         )
                         attempts.append(attempt)
                         selected_route = route
@@ -724,7 +776,8 @@ class GatewayEngine:
                         val_err = OutputValidationError(GatewayErrorCode.VALIDATION_FAILED.value, f"Validation errors: {val_summary.errors}")
                         attempt = self._record_attempt(
                             request, route, leg, attempt_count, att_kind, att_start_utc, lat_ms,
-                            AttemptOutcome.VALIDATION_ERROR, resp=raw_resp, error=val_err
+                            AttemptOutcome.VALIDATION_ERROR, resp=raw_resp, error=val_err,
+                            validation_summary=val_summary,
                         )
                         attempts.append(attempt)
                         last_error = val_err
@@ -856,10 +909,11 @@ class GatewayEngine:
     ) -> LLMResultV1:
         """Assemble LLMResultV1 from attempt data (shared by sync and async paths)."""
         total_lat_ms = (time.monotonic() - start_time_monotonic) * MS_PER_SECOND
-        tot_prompt = sum(a.prompt_tokens for a in attempts)
-        tot_comp = sum(a.completion_tokens for a in attempts)
-        tot_tokens = sum(a.total_tokens for a in attempts)
+        tot_prompt = sum(a.prompt_tokens for a in attempts if a.prompt_tokens is not None)
+        tot_comp = sum(a.completion_tokens for a in attempts if a.completion_tokens is not None)
+        tot_tokens = sum(a.total_tokens for a in attempts if a.total_tokens is not None)
         tot_cost = sum(a.cost_usd for a in attempts)
+        has_unreported_usage = any(not a.is_usage_reported for a in attempts)
 
         usage = UsageSummaryV1(
             prompt_tokens=tot_prompt,
@@ -867,6 +921,7 @@ class GatewayEngine:
             total_tokens=tot_tokens,
             cost_usd=round(tot_cost, 6),
             pricing_snapshot_id=request.pricing_snapshot_id,
+            is_estimated=has_unreported_usage,
         )
         timing = TimingSummaryV1(
             started_at_utc=start_time_utc,
@@ -877,9 +932,10 @@ class GatewayEngine:
 
         if released_output is not None:
             status = ResultStatus.DEGRADED if degradation else ResultStatus.SUCCEEDED
-            err_dict = None
+            err_payload = None
         else:
             status = ResultStatus.FAILED
+            selected_route = None  # Invariant: failed results must have selected_route=None
             attempt_count = len(attempts)
             if attempt_count >= request.budget.max_physical_attempts:
                 last_error = BudgetExhaustedError(
@@ -898,7 +954,7 @@ class GatewayEngine:
                 "error_class": ErrorClass.INTERNAL.value,
                 "message": "Execution failed",
             }
-
+            err_payload = LLMErrorPayloadV1(**err_dict)
 
         return LLMResultV1(
             request_id=request.request_id,
@@ -911,7 +967,7 @@ class GatewayEngine:
             usage=usage,
             timing=timing,
             degradation=degradation,
-            error=err_dict,
+            error=err_payload,
             trace=request.trace_context,
         )
 

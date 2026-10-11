@@ -34,8 +34,10 @@ from llm_gateway.contracts import (
     ToolSpecV1,
     TraceContextV1,
     UsageSummaryV1,
+    ValidationGateResultV1,
     ValidationGateStatus,
     ValidationSummaryV1,
+    LLMErrorPayloadV1,
 )
 from llm_gateway.constants import (
     AdapterKind,
@@ -110,6 +112,8 @@ __all__ = [
     "UsageSummaryV1",
     "TimingSummaryV1",
     "ValidationSummaryV1",
+    "ValidationGateResultV1",
+    "LLMErrorPayloadV1",
     "DegradationSummaryV1",
     "PolicyLeg",
     "RoutingMode",

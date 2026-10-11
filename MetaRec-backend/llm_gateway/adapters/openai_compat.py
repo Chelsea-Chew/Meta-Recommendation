@@ -164,9 +164,18 @@ class OpenAICompatibleAdapter(BaseLLMAdapter):
                         )
 
         usage = getattr(response, "usage", None)
-        p_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        c_tokens = getattr(usage, "completion_tokens", 0) or 0
-        t_tokens = getattr(usage, "total_tokens", 0) or (p_tokens + c_tokens)
+        if usage is not None:
+            p_tokens = getattr(usage, "prompt_tokens", None)
+            c_tokens = getattr(usage, "completion_tokens", None)
+            t_tokens = getattr(usage, "total_tokens", None) or (
+                (p_tokens + c_tokens) if p_tokens is not None and c_tokens is not None else None
+            )
+            is_reported = p_tokens is not None
+        else:
+            p_tokens = None
+            c_tokens = None
+            t_tokens = None
+            is_reported = False
 
         return RawAdapterResponse(
             text=text,
@@ -174,6 +183,7 @@ class OpenAICompatibleAdapter(BaseLLMAdapter):
             prompt_tokens=p_tokens,
             completion_tokens=c_tokens,
             total_tokens=t_tokens,
+            is_usage_reported=is_reported,
             http_status=HTTP_STATUS_OK,
             provider_request_id=getattr(response, "id", None),
             model=model,

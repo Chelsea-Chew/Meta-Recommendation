@@ -28,6 +28,7 @@ from llm_gateway import (
     ScopedToolCatalogV1,
     ToolSpecV1,
     TransportError,
+    ValidationGateStatus,
     get_gateway_engine,
     get_provider_registry,
     invoke_llm,
@@ -366,3 +367,75 @@ def test_exactly_once_usage_accounting_in_ledger(fake_adapter: FakeLLMAdapter):
         assert ledger.totals["completion_tokens"] == 75  # 25 (failed attempt) + 50 (successful attempt)
     finally:
         reset_ledger(token)
+
+
+def test_json_schema_strictly_required_for_json_contract():
+    with pytest.raises(ValueError, match="json_schema is strictly required"):
+        ResponseContractV1(kind=ResponseKind.JSON, json_schema=None)
+
+    with pytest.raises(ValueError, match="json_schema is strictly required"):
+        ResponseContractV1(kind=ResponseKind.JSON, json_schema={})
+
+    # Valid schema succeeds
+    valid_contract = ResponseContractV1(kind=ResponseKind.JSON, json_schema={"type": "object", "properties": {"a": {"type": "string"}}})
+    assert valid_contract.kind == ResponseKind.JSON
+
+
+def test_policy_context_strictly_requires_fields():
+    # Omitting required fields raises ValidationError
+    with pytest.raises(Exception):
+        PolicyContextV1()  # Missing contains_itinerary_state and request_mode
+
+    # Explicit values succeed
+    ctx = PolicyContextV1(contains_itinerary_state=False, request_mode=RequestMode.SINGLE_DOMAIN)
+    assert ctx.contains_itinerary_state is False
+    assert ctx.request_mode == RequestMode.SINGLE_DOMAIN
+
+
+def test_extra_fields_forbidden_on_request():
+    with pytest.raises(Exception):
+        MessageV1(role=RequestRole.USER, content="hi", unauthorized_field="bad")
+
+    with pytest.raises(Exception):
+        PolicyContextV1(contains_itinerary_state=False, request_mode=RequestMode.SINGLE_DOMAIN, extra_field="bad")
+
+
+def test_tool_choice_validation_with_scoped_catalog():
+    catalog = ScopedToolCatalogV1(
+        catalog_id="cat-1",
+        tools=[ToolSpecV1(name="search_restaurants", description="search", parameters={"type": "object"})],
+    )
+    # Valid choices
+    req1 = _make_request(tools=catalog, tool_choice="none")
+    assert req1.tool_choice == "none"
+
+    req2 = _make_request(tools=catalog, tool_choice="auto")
+    assert req2.tool_choice == "auto"
+
+    req3 = _make_request(tools=catalog, tool_choice="search_restaurants")
+    assert req3.tool_choice == "search_restaurants"
+
+    # Invalid choice not in catalog
+    with pytest.raises(ValueError, match="not present in scoped catalog"):
+        _make_request(tools=catalog, tool_choice="unauthorized_tool")
+
+    # Forced choice without catalog
+    with pytest.raises(ValueError, match="no tools catalog provided"):
+        _make_request(tools=None, tool_choice="some_tool")
+
+
+def test_attempt_audit_includes_validation_summary_and_timestamps(fake_adapter: FakeLLMAdapter):
+    fake_adapter.enqueue_response(ScriptedResponse(text="Hello world", prompt_tokens=10, completion_tokens=5))
+    req = _make_request()
+    res = invoke_llm(req)
+
+    assert res.status == ResultStatus.SUCCEEDED
+    assert len(res.attempts) == 1
+    att = res.attempts[0]
+    assert att.ended_at_utc is not None
+    assert att.ended_at_utc >= att.started_at_utc
+    assert att.validation_summary is not None
+    assert att.validation_summary.json_parse == ValidationGateStatus.NOT_APPLICABLE
+    assert att.provider_response_received is True
+    assert att.is_usage_reported is True
+

@@ -131,10 +131,19 @@ class OpenAIBaseAdapter(BaseLLMAdapter):
                     }
                 )
 
-        usage = data.get("usage", {}) or {}
-        p_tokens = usage.get("prompt_tokens", 0) or 0
-        c_tokens = usage.get("completion_tokens", 0) or 0
-        t_tokens = usage.get("total_tokens", 0) or (p_tokens + c_tokens)
+        usage = data.get("usage")
+        if usage is not None:
+            p_tokens = usage.get("prompt_tokens")
+            c_tokens = usage.get("completion_tokens")
+            t_tokens = usage.get("total_tokens") or (
+                (p_tokens + c_tokens) if p_tokens is not None and c_tokens is not None else None
+            )
+            is_reported = p_tokens is not None
+        else:
+            p_tokens = None
+            c_tokens = None
+            t_tokens = None
+            is_reported = False
 
         return RawAdapterResponse(
             text=text,
@@ -142,6 +151,7 @@ class OpenAIBaseAdapter(BaseLLMAdapter):
             prompt_tokens=p_tokens,
             completion_tokens=c_tokens,
             total_tokens=t_tokens,
+            is_usage_reported=is_reported,
             http_status=HTTP_STATUS_OK,
             provider_request_id=data.get("id"),
             model=data.get("model", model),

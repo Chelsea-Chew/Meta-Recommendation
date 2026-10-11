@@ -86,6 +86,7 @@ class FakeLLMAdapter(BaseLLMAdapter):
             prompt_tokens=self.default_prompt_tokens,
             completion_tokens=self.default_completion_tokens,
             total_tokens=self.default_prompt_tokens + self.default_completion_tokens,
+            is_usage_reported=True,
             http_status=HTTP_STATUS_OK,
             provider_request_id=f"fake-req-{len(self.call_history)}",
             model=route.model_id,
@@ -113,12 +114,18 @@ class FakeLLMAdapter(BaseLLMAdapter):
             setattr(scripted.error_to_raise, "completion_tokens", scripted.completion_tokens)
             raise scripted.error_to_raise
 
+        p_tok = scripted.prompt_tokens
+        c_tok = scripted.completion_tokens
+        t_tok = (p_tok + c_tok) if (p_tok is not None and c_tok is not None) else None
+        is_rep = p_tok is not None
+
         return RawAdapterResponse(
             text=scripted.text,
             tool_calls=scripted.tool_calls,
-            prompt_tokens=scripted.prompt_tokens,
-            completion_tokens=scripted.completion_tokens,
-            total_tokens=scripted.prompt_tokens + scripted.completion_tokens,
+            prompt_tokens=p_tok,
+            completion_tokens=c_tok,
+            total_tokens=t_tok,
+            is_usage_reported=is_rep,
             http_status=scripted.http_status,
             provider_request_id=scripted.provider_request_id,
             model=route.model_id,
@@ -143,19 +150,25 @@ class FakeLLMAdapter(BaseLLMAdapter):
         if scripted.simulated_delay_ms > 0:
             await asyncio.sleep(scripted.simulated_delay_ms / MS_PER_SECOND)
 
-
         if scripted.error_to_raise:
             setattr(scripted.error_to_raise, "prompt_tokens", scripted.prompt_tokens)
             setattr(scripted.error_to_raise, "completion_tokens", scripted.completion_tokens)
             raise scripted.error_to_raise
 
+        p_tok = scripted.prompt_tokens
+        c_tok = scripted.completion_tokens
+        t_tok = (p_tok + c_tok) if (p_tok is not None and c_tok is not None) else None
+        is_rep = p_tok is not None
+
         return RawAdapterResponse(
             text=scripted.text,
             tool_calls=scripted.tool_calls,
-            prompt_tokens=scripted.prompt_tokens,
-            completion_tokens=scripted.completion_tokens,
-            total_tokens=scripted.prompt_tokens + scripted.completion_tokens,
+            prompt_tokens=p_tok,
+            completion_tokens=c_tok,
+            total_tokens=t_tok,
+            is_usage_reported=is_rep,
             http_status=scripted.http_status,
             provider_request_id=scripted.provider_request_id,
             model=route.model_id,
         )
+
