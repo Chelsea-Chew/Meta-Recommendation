@@ -335,6 +335,16 @@ class ValidationGateResultV1(BaseModel):
     payload: Optional[OutputPayloadV1] = None
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="after")
+    def validate_payload_consistency(self) -> "ValidationGateResultV1":
+        """Enforce: passed=True -> payload present; passed=False -> payload absent."""
+        if self.passed and self.payload is None:
+            raise ValueError("ValidationGateResultV1 with passed=True must have a non-null payload")
+        if not self.passed and self.payload is not None:
+            raise ValueError("ValidationGateResultV1 with passed=False must have payload=None")
+        return self
+
+
 
 class LLMResultV1(BaseModel):
     schema_version: str = SCHEMA_VERSION_LLM_RESULT

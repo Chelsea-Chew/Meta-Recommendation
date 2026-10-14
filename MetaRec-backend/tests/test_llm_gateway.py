@@ -28,7 +28,11 @@ from llm_gateway import (
     ScopedToolCatalogV1,
     ToolSpecV1,
     TransportError,
+    OutputPayloadV1,
     ValidationGateStatus,
+    ValidationGateResultV1,
+    ValidationSummaryV1,
+    create_engine,
     get_gateway_engine,
     get_provider_registry,
     invoke_llm,
@@ -179,9 +183,11 @@ def test_sync_invoke_llm_json_schema_failure(fake_adapter: FakeLLMAdapter):
     result = invoke_llm(req)
 
     assert result.status == ResultStatus.FAILED
-    assert result.validation.json_schema.value == "failed"
-    assert len(result.validation.errors) > 0
+    assert result.validation.json_schema == ValidationGateStatus.NOT_APPLICABLE
+    assert result.validation.errors == []
     assert result.attempts[0].outcome == AttemptOutcome.VALIDATION_ERROR
+    assert result.attempts[0].validation_summary.json_schema.value == "failed"
+    assert len(result.attempts[0].validation_summary.errors) > 0
 
 
 def test_transport_retry_and_recovery(fake_adapter: FakeLLMAdapter):
@@ -438,4 +444,160 @@ def test_attempt_audit_includes_validation_summary_and_timestamps(fake_adapter: 
     assert att.validation_summary.json_parse == ValidationGateStatus.NOT_APPLICABLE
     assert att.provider_response_received is True
     assert att.is_usage_reported is True
+
+
+def test_external_validator_hook_sync_and_async(fake_adapter: FakeLLMAdapter):
+    fake_adapter.enqueue_response(ScriptedResponse(text='{"value": 42}'))
+    fake_adapter.enqueue_response(ScriptedResponse(text='{"value": 99}'))
+
+    calls = []
+
+    def sync_hook(request, raw_resp, sanitized_mapping):
+        calls.append(("sync", raw_resp.text))
+        summary = ValidationSummaryV1(json_parse=ValidationGateStatus.PASSED)
+        payload = OutputPayloadV1(kind=ResponseKind.JSON, json={"custom": True})
+        return ValidationGateResultV1(passed=True, summary=summary, payload=payload)
+
+    contract = ResponseContractV1(kind=ResponseKind.JSON, json_schema={"type": "object"})
+    req = _make_request(response_contract=contract)
+
+    # 1. Sync invocation with validator_hook parameter
+    res_sync = invoke_llm(req, validator_hook=sync_hook)
+    assert res_sync.status == ResultStatus.SUCCEEDED
+    assert res_sync.output.json_payload == {"custom": True}
+    assert len(calls) == 1
+    assert calls[0][0] == "sync"
+
+    # 2. Async invocation with async validator hook
+    async def async_hook(request, raw_resp, sanitized_mapping):
+        calls.append(("async", raw_resp.text))
+        summary = ValidationSummaryV1(json_parse=ValidationGateStatus.PASSED)
+        payload = OutputPayloadV1(kind=ResponseKind.JSON, json={"async_custom": True})
+        return ValidationGateResultV1(passed=True, summary=summary, payload=payload)
+
+    import asyncio
+    res_async = asyncio.run(invoke_llm_async(req, validator_hook=async_hook))
+    assert res_async.status == ResultStatus.SUCCEEDED
+    assert res_async.output.json_payload == {"async_custom": True}
+    assert len(calls) == 2
+    assert calls[1][0] == "async"
+
+
+def test_validation_safeguards_output_release(fake_adapter: FakeLLMAdapter):
+    # Safeguard 1: passed=True with payload=None raises ValueError
+    summary = ValidationSummaryV1()
+    with pytest.raises(ValueError, match="passed=True must have a non-null payload"):
+        ValidationGateResultV1(passed=True, summary=summary, payload=None)
+
+    # Safeguard 2: passed=False with payload!=None raises ValueError
+    with pytest.raises(ValueError, match="passed=False must have payload=None"):
+        ValidationGateResultV1(
+            passed=False,
+            summary=summary,
+            payload=OutputPayloadV1(kind=ResponseKind.TEXT, text="bad"),
+        )
+
+    # Safeguard 3: Payload kind mismatch with contract is rejected and not released
+    def mismatched_hook(request, raw_resp, sanitized_mapping):
+        # Contract expects JSON, but hook returns TEXT payload
+        return ValidationGateResultV1(
+            passed=True,
+            summary=ValidationSummaryV1(),
+            payload=OutputPayloadV1(kind=ResponseKind.TEXT, text="raw text"),
+        )
+
+    contract = ResponseContractV1(kind=ResponseKind.JSON, json_schema={"type": "object"})
+    req = _make_request(response_contract=contract)
+    fake_adapter.enqueue_response(ScriptedResponse(text='{"status": "ok"}'))
+
+    res = invoke_llm(req, validator_hook=mismatched_hook)
+    assert res.status == ResultStatus.FAILED
+    assert res.output is None
+    assert res.attempts[0].outcome == AttemptOutcome.VALIDATION_ERROR
+    assert any("Expected JSON payload kind" in err for err in res.attempts[0].validation_summary.errors)
+
+
+def test_missing_usage_and_provider_zero_accounting(fake_adapter: FakeLLMAdapter):
+    ledger = UsageLedger()
+    token = push_ledger(ledger)
+
+    try:
+        # 1. Missing usage attempt (prompt_tokens=None, completion_tokens=None)
+        fake_adapter.enqueue_response(
+            ScriptedResponse(text="Missing usage response", prompt_tokens=None, completion_tokens=None)
+        )
+        req1 = _make_request()
+        res1 = invoke_llm(req1)
+
+        assert res1.status == ResultStatus.SUCCEEDED
+        att1 = res1.attempts[0]
+        assert att1.is_usage_reported is False
+        assert att1.prompt_tokens is None
+        assert att1.completion_tokens is None
+        assert att1.cost_usd == 0.0
+        assert res1.usage.is_estimated is False
+        assert res1.usage.cost_usd == 0.0
+
+        # Verify ledger has 1 event with 0 tokens and $0 cost
+        assert len(ledger.events) == 1
+        assert ledger.events[0].prompt_tokens == 0
+        assert ledger.events[0].cost_usd == 0.0
+
+        # 2. Provider reported zero attempt (prompt_tokens=0, completion_tokens=0)
+        fake_adapter.enqueue_response(
+            ScriptedResponse(text="Zero usage response", prompt_tokens=0, completion_tokens=0)
+        )
+        req2 = _make_request()
+        res2 = invoke_llm(req2)
+
+        assert res2.status == ResultStatus.SUCCEEDED
+        att2 = res2.attempts[0]
+        assert att2.is_usage_reported is True
+        assert att2.prompt_tokens == 0
+        assert att2.completion_tokens == 0
+        assert att2.cost_usd == 0.0
+        assert res2.usage.is_estimated is False
+        assert res2.usage.cost_usd == 0.0
+
+        # Verify ledger now has 2 events total (both exactly-once recorded)
+        assert len(ledger.events) == 2
+        assert ledger.events[1].prompt_tokens == 0
+        assert ledger.events[1].cost_usd == 0.0
+    finally:
+        reset_ledger(token)
+
+
+def test_failed_result_validation_summary_separation(fake_adapter: FakeLLMAdapter):
+    # Enqueue a response that fails validation
+    fake_adapter.enqueue_response(
+        ScriptedResponse(text='{"wrong": 123}')
+    )
+    contract = ResponseContractV1(
+        kind=ResponseKind.JSON,
+        schema_id="test.schema",
+        json_schema={"type": "object", "required": ["expected_field"], "properties": {"expected_field": {"type": "string"}}},
+    )
+    req = _make_request(response_contract=contract)
+    result = invoke_llm(req)
+
+    assert result.status == ResultStatus.FAILED
+    assert result.output is None
+
+    # Result-level validation: NOT_APPLICABLE and errors=[]
+    assert result.validation.json_parse == ValidationGateStatus.NOT_APPLICABLE
+    assert result.validation.json_schema == ValidationGateStatus.NOT_APPLICABLE
+    assert result.validation.semantic == ValidationGateStatus.NOT_APPLICABLE
+    assert result.validation.errors == []
+    assert result.validation.validator_id == "none"
+
+    # Attempt-level validation retains candidate validation details
+    assert len(result.attempts) == 1
+    assert result.attempts[0].outcome == AttemptOutcome.VALIDATION_ERROR
+    assert result.attempts[0].validation_summary.json_schema == ValidationGateStatus.FAILED
+    assert len(result.attempts[0].validation_summary.errors) > 0
+
+    # Structured error explains failure
+    assert result.error is not None
+    assert result.error.code == "validation_failed"
+
 

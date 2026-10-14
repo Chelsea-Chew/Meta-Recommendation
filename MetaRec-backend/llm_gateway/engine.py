@@ -31,6 +31,7 @@ Fix #10 – Token budget is pre-validated against the registered model's
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -39,7 +40,7 @@ import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from llm_gateway.adapters.anthropic import AnthropicAdapter
 from llm_gateway.adapters.base import BaseLLMAdapter, RawAdapterResponse
@@ -144,8 +145,13 @@ class GatewayEngine:
     this module.
     """
 
-    def __init__(self, registry: Optional[ProviderRegistry] = None) -> None:
+    def __init__(
+        self,
+        registry: Optional[ProviderRegistry] = None,
+        validator_hook: Optional[Callable[..., Any]] = None,
+    ) -> None:
         self.registry = registry or get_provider_registry()
+        self.validator_hook = validator_hook
         self._adapters: Dict[str, BaseLLMAdapter] = {
             ProviderId.FAKE.value: FakeLLMAdapter(),
             ProviderId.GROQ.value: OpenAICompatibleAdapter(provider_id=ProviderId.GROQ.value),
@@ -154,6 +160,10 @@ class GatewayEngine:
             ProviderId.OPENAI_BASE.value: OpenAIBaseAdapter(provider_id=ProviderId.OPENAI_BASE.value),
             ProviderId.ANTHROPIC.value: AnthropicAdapter(provider_id=ProviderId.ANTHROPIC.value),
         }
+
+    def set_validator_hook(self, hook: Optional[Callable[..., Any]]) -> None:
+        """Register or clear an external validator hook."""
+        self.validator_hook = hook
 
     def register_adapter(self, provider_id: str, adapter: BaseLLMAdapter) -> None:
         self._adapters[provider_id] = adapter
@@ -377,9 +387,9 @@ class GatewayEngine:
             outcome=outcome,
             http_status=resp.http_status if resp else (HTTP_STATUS_INTERNAL_SERVER_ERROR if error else HTTP_STATUS_OK),
             provider_request_id=resp.provider_request_id if resp else None,
-            prompt_tokens=p_tokens,
-            completion_tokens=c_tokens,
-            total_tokens=t_tokens,
+            prompt_tokens=p_tokens if is_usage_reported else None,
+            completion_tokens=c_tokens if is_usage_reported else None,
+            total_tokens=t_tokens if is_usage_reported else None,
             is_usage_reported=is_usage_reported,
             cost_usd=cost_usd,
             price_table_version=pricing.pricing_snapshot_id,
@@ -389,22 +399,25 @@ class GatewayEngine:
             validation_summary=validation_summary,
         )
 
-        # Update llm_usage ledger if present and usage was reported
-        if is_usage_reported and p_tokens is not None and c_tokens is not None:
-            try:
-                from llm_usage import UsageEvent, current_ledger
-                ledger = current_ledger()
-                if ledger is not None:
-                    event = UsageEvent(
-                        model=route.model_id,
-                        prompt_tokens=p_tokens,
-                        completion_tokens=c_tokens,
-                        total_tokens=t_tokens or (p_tokens + c_tokens),
-                        cost_usd=cost_usd,
-                    )
-                    ledger.add(event)
-            except Exception as exc:
-                logger.debug("Could not record to llm_usage ledger: %s", exc)
+        # Update llm_usage ledger: every counted physical attempt emits exactly one event
+        try:
+            from llm_usage import UsageEvent, current_ledger
+            ledger = current_ledger()
+            if ledger is not None:
+                event_prompt = p_tokens if (is_usage_reported and p_tokens is not None) else 0
+                event_comp = c_tokens if (is_usage_reported and c_tokens is not None) else 0
+                event_total = t_tokens if (is_usage_reported and t_tokens is not None) else (event_prompt + event_comp)
+                event_cost = cost_usd if is_usage_reported else 0.0
+                event = UsageEvent(
+                    model=route.model_id,
+                    prompt_tokens=event_prompt,
+                    completion_tokens=event_comp,
+                    total_tokens=event_total,
+                    cost_usd=event_cost,
+                )
+                ledger.add(event)
+        except Exception as exc:
+            logger.debug("Could not record to llm_usage ledger: %s", exc)
 
         return attempt
 
@@ -508,15 +521,104 @@ class GatewayEngine:
 
         return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
 
+    def _is_payload_contract_compatible(
+        self,
+        request: LLMRequestV1,
+        payload: Optional[OutputPayloadV1],
+    ) -> Tuple[bool, Optional[str]]:
+        """Verify that released payload matches the request's response contract."""
+        if payload is None:
+            return False, "Payload is missing"
+        contract = request.response_contract
+        if contract.kind == ResponseKind.TEXT:
+            if payload.kind != ResponseKind.TEXT:
+                return False, f"Expected TEXT payload kind, got {payload.kind.value}"
+            if not payload.text and not contract.allow_empty:
+                return False, "Empty text response not allowed by contract"
+        elif contract.kind == ResponseKind.JSON:
+            if payload.kind != ResponseKind.JSON:
+                return False, f"Expected JSON payload kind, got {payload.kind.value}"
+            if payload.json_payload is None:
+                return False, "JSON payload content is null"
+        elif contract.kind == ResponseKind.TOOL_CALLS:
+            if payload.kind != ResponseKind.TOOL_CALLS:
+                return False, f"Expected TOOL_CALLS payload kind, got {payload.kind.value}"
+        return True, None
+
+    def _execute_validation_sync(
+        self,
+        request: LLMRequestV1,
+        resp: RawAdapterResponse,
+        sanitized_mapping: Dict[str, str],
+        validator_hook: Optional[Callable[..., Any]] = None,
+    ) -> ValidationGateResultV1:
+        """Execute validation synchronously using external hook if provided, else built-in gates."""
+        hook = validator_hook or self.validator_hook
+        if hook is not None:
+            try:
+                res = hook(request, resp, sanitized_mapping)
+                if asyncio.iscoroutine(res):
+                    raise RuntimeError(
+                        "Async validator hook cannot be invoked synchronously in invoke_llm; use invoke_llm_async instead"
+                    )
+                if isinstance(res, ValidationGateResultV1):
+                    return res
+                if isinstance(res, dict):
+                    return ValidationGateResultV1(**res)
+                raise TypeError(f"External validator hook must return ValidationGateResultV1, got {type(res)}")
+            except Exception as exc:
+                logger.warning("External validator hook error: %s", exc)
+                val_summary = ValidationSummaryV1(
+                    validator_id=request.response_contract.semantic_validator_id,
+                    errors=[f"External validator error: {exc}"],
+                )
+                return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
+
+        return self._validate_output_gate(request, resp, sanitized_mapping)
+
+    async def _execute_validation_async(
+        self,
+        request: LLMRequestV1,
+        resp: RawAdapterResponse,
+        sanitized_mapping: Dict[str, str],
+        validator_hook: Optional[Callable[..., Any]] = None,
+    ) -> ValidationGateResultV1:
+        """Execute validation asynchronously using external hook if provided, else built-in gates."""
+        hook = validator_hook or self.validator_hook
+        if hook is not None:
+            try:
+                if inspect.iscoroutinefunction(hook):
+                    res = await hook(request, resp, sanitized_mapping)
+                else:
+                    res = hook(request, resp, sanitized_mapping)
+                    if asyncio.iscoroutine(res):
+                        res = await res
+                if isinstance(res, ValidationGateResultV1):
+                    return res
+                if isinstance(res, dict):
+                    return ValidationGateResultV1(**res)
+                raise TypeError(f"External validator hook must return ValidationGateResultV1, got {type(res)}")
+            except Exception as exc:
+                logger.warning("External validator hook error: %s", exc)
+                val_summary = ValidationSummaryV1(
+                    validator_id=request.response_contract.semantic_validator_id,
+                    errors=[f"External validator error: {exc}"],
+                )
+                return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
+
+        return self._validate_output_gate(request, resp, sanitized_mapping)
+
     def _validate_output(
         self,
         request: LLMRequestV1,
         resp: RawAdapterResponse,
         sanitized_mapping: Dict[str, str],
+        validator_hook: Optional[Callable[..., Any]] = None,
     ) -> Tuple[ValidationSummaryV1, Optional[OutputPayloadV1]]:
-        """Backwards-compatible wrapper delegating to _validate_output_gate."""
-        gate_res = self._validate_output_gate(request, resp, sanitized_mapping)
+        """Backwards-compatible wrapper delegating to _execute_validation_sync."""
+        gate_res = self._execute_validation_sync(request, resp, sanitized_mapping, validator_hook)
         return gate_res.summary, gate_res.payload
+
 
     # ── Core execution: shared attempt-loop logic ────────────────────────────
 
@@ -527,6 +629,7 @@ class GatewayEngine:
         initial_route: RouteV1,
         initial_leg: PolicyLeg,
         start_time_monotonic: float,
+        validator_hook: Optional[Callable[..., Any]] = None,
     ) -> Tuple[
         List[PhysicalAttemptV1],
         Optional[OutputPayloadV1],
@@ -544,7 +647,7 @@ class GatewayEngine:
         last_error: Optional[LLMErrorV1] = None
         selected_route: Optional[RouteV1] = None
         released_output: Optional[OutputPayloadV1] = None
-        final_val_summary = ValidationSummaryV1()
+        final_val_summary = ValidationSummaryV1(validator_id=request.response_contract.semantic_validator_id)
         degradation: Optional[DegradationSummaryV1] = None
 
         for route, leg in route_ladder:
@@ -601,10 +704,18 @@ class GatewayEngine:
                     # Fix #8: log response only when allowed
                     self._log_privacy_safe(request, "RESPONSE", raw_resp.text or "")
 
-                    val_summary, out_payload = self._validate_output(request, raw_resp, san_mapping)
+                    gate_res = self._execute_validation_sync(request, raw_resp, san_mapping, validator_hook)
+                    val_summary = gate_res.summary
                     final_val_summary = val_summary
 
-                    if out_payload is not None:
+                    is_compat, compat_err = self._is_payload_contract_compatible(request, gate_res.payload)
+                    if not is_compat and gate_res.passed:
+                        val_summary.errors.append(compat_err or "Payload incompatible with response contract")
+                        is_valid = False
+                    else:
+                        is_valid = gate_res.passed and is_compat
+
+                    if is_valid and gate_res.payload is not None:
                         attempt = self._record_attempt(
                             request, route, leg, attempt_count, att_kind, att_start_utc, lat_ms,
                             AttemptOutcome.SUCCESS, resp=raw_resp, applied_changes=adaptations.get("removed_params"),
@@ -612,7 +723,7 @@ class GatewayEngine:
                         )
                         attempts.append(attempt)
                         selected_route = route
-                        released_output = out_payload
+                        released_output = gate_res.payload
                         if leg != initial_leg:
                             degradation = DegradationSummaryV1(
                                 reason_code=DegradationReason.FALLBACK_ROUTE_USED.value, from_route=initial_route, to_route=route
@@ -683,6 +794,7 @@ class GatewayEngine:
         initial_route: RouteV1,
         initial_leg: PolicyLeg,
         start_time_monotonic: float,
+        validator_hook: Optional[Callable[..., Any]] = None,
     ) -> Tuple[
         List[PhysicalAttemptV1],
         Optional[OutputPayloadV1],
@@ -700,7 +812,7 @@ class GatewayEngine:
         last_error: Optional[LLMErrorV1] = None
         selected_route: Optional[RouteV1] = None
         released_output: Optional[OutputPayloadV1] = None
-        final_val_summary = ValidationSummaryV1()
+        final_val_summary = ValidationSummaryV1(validator_id=request.response_contract.semantic_validator_id)
         degradation: Optional[DegradationSummaryV1] = None
 
         for route, leg in route_ladder:
@@ -755,10 +867,18 @@ class GatewayEngine:
 
                     self._log_privacy_safe(request, "RESPONSE", raw_resp.text or "")
 
-                    val_summary, out_payload = self._validate_output(request, raw_resp, san_mapping)
+                    gate_res = await self._execute_validation_async(request, raw_resp, san_mapping, validator_hook)
+                    val_summary = gate_res.summary
                     final_val_summary = val_summary
 
-                    if out_payload is not None:
+                    is_compat, compat_err = self._is_payload_contract_compatible(request, gate_res.payload)
+                    if not is_compat and gate_res.passed:
+                        val_summary.errors.append(compat_err or "Payload incompatible with response contract")
+                        is_valid = False
+                    else:
+                        is_valid = gate_res.passed and is_compat
+
+                    if is_valid and gate_res.payload is not None:
                         attempt = self._record_attempt(
                             request, route, leg, attempt_count, att_kind, att_start_utc, lat_ms,
                             AttemptOutcome.SUCCESS, resp=raw_resp, applied_changes=adaptations.get("removed_params"),
@@ -766,7 +886,7 @@ class GatewayEngine:
                         )
                         attempts.append(attempt)
                         selected_route = route
-                        released_output = out_payload
+                        released_output = gate_res.payload
                         if leg != initial_leg:
                             degradation = DegradationSummaryV1(
                                 reason_code=DegradationReason.FALLBACK_ROUTE_USED.value, from_route=initial_route, to_route=route
@@ -832,7 +952,11 @@ class GatewayEngine:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def invoke_llm(self, request: LLMRequestV1) -> LLMResultV1:
+    def invoke_llm(
+        self,
+        request: LLMRequestV1,
+        validator_hook: Optional[Callable[..., Any]] = None,
+    ) -> LLMResultV1:
         """Synchronous execution of LLMRequestV1 across provider route ladder.
 
         .. warning::
@@ -850,7 +974,10 @@ class GatewayEngine:
         route_ladder = self._build_route_ladder(request, initial_route, initial_leg)
 
         attempts, released_output, selected_route, final_val_summary, degradation, last_error = (
-            self._run_attempt_loop_sync(request, route_ladder, initial_route, initial_leg, start_time_monotonic)
+            self._run_attempt_loop_sync(
+                request, route_ladder, initial_route, initial_leg, start_time_monotonic,
+                validator_hook=validator_hook,
+            )
         )
 
         return self._build_result(
@@ -858,7 +985,11 @@ class GatewayEngine:
             degradation, last_error, start_time_utc, start_time_monotonic, deadline_ms,
         )
 
-    async def invoke_llm_async(self, request: LLMRequestV1) -> LLMResultV1:
+    async def invoke_llm_async(
+        self,
+        request: LLMRequestV1,
+        validator_hook: Optional[Callable[..., Any]] = None,
+    ) -> LLMResultV1:
         """Asynchronous execution of LLMRequestV1 across provider route ladder."""
         start_time_monotonic = time.monotonic()
         start_time_utc = time.time()
@@ -868,7 +999,10 @@ class GatewayEngine:
         route_ladder = self._build_route_ladder(request, initial_route, initial_leg)
 
         attempts, released_output, selected_route, final_val_summary, degradation, last_error = (
-            await self._run_attempt_loop_async(request, route_ladder, initial_route, initial_leg, start_time_monotonic)
+            await self._run_attempt_loop_async(
+                request, route_ladder, initial_route, initial_leg, start_time_monotonic,
+                validator_hook=validator_hook,
+            )
         )
 
         return self._build_result(
@@ -879,6 +1013,7 @@ class GatewayEngine:
     async def invoke_llm_in_executor(
         self,
         request: LLMRequestV1,
+        validator_hook: Optional[Callable[..., Any]] = None,
         executor: Optional[ThreadPoolExecutor] = None,
     ) -> LLMResultV1:
         """Run the synchronous engine in a thread-pool executor.
@@ -892,7 +1027,9 @@ class GatewayEngine:
             result = await engine.invoke_llm_in_executor(request)
         """
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(executor, self.invoke_llm, request)
+        from functools import partial
+        call_fn = partial(self.invoke_llm, request, validator_hook=validator_hook)
+        return await loop.run_in_executor(executor, call_fn)
 
     def _build_result(
         self,
@@ -913,7 +1050,6 @@ class GatewayEngine:
         tot_comp = sum(a.completion_tokens for a in attempts if a.completion_tokens is not None)
         tot_tokens = sum(a.total_tokens for a in attempts if a.total_tokens is not None)
         tot_cost = sum(a.cost_usd for a in attempts)
-        has_unreported_usage = any(not a.is_usage_reported for a in attempts)
 
         usage = UsageSummaryV1(
             prompt_tokens=tot_prompt,
@@ -921,7 +1057,7 @@ class GatewayEngine:
             total_tokens=tot_tokens,
             cost_usd=round(tot_cost, 6),
             pricing_snapshot_id=request.pricing_snapshot_id,
-            is_estimated=has_unreported_usage,
+            is_estimated=False,
         )
         timing = TimingSummaryV1(
             started_at_utc=start_time_utc,
@@ -933,9 +1069,20 @@ class GatewayEngine:
         if released_output is not None:
             status = ResultStatus.DEGRADED if degradation else ResultStatus.SUCCEEDED
             err_payload = None
+            res_val_summary = final_val_summary
         else:
             status = ResultStatus.FAILED
             selected_route = None  # Invariant: failed results must have selected_route=None
+            # Result-level validation represents the released output. Since output is None,
+            # top-level validation uses NOT_APPLICABLE with errors=[] while keeping the validator_id.
+            # Attempt-level validation retains candidate validation details in each PhysicalAttemptV1.
+            res_val_summary = ValidationSummaryV1(
+                json_parse=ValidationGateStatus.NOT_APPLICABLE,
+                json_schema=ValidationGateStatus.NOT_APPLICABLE,
+                semantic=ValidationGateStatus.NOT_APPLICABLE,
+                validator_id=request.response_contract.semantic_validator_id,
+                errors=[],
+            )
             attempt_count = len(attempts)
             if attempt_count >= request.budget.max_physical_attempts:
                 last_error = BudgetExhaustedError(
@@ -962,7 +1109,7 @@ class GatewayEngine:
             status=status,
             output=released_output,
             selected_route=selected_route,
-            validation=final_val_summary,
+            validation=res_val_summary,
             attempts=attempts,
             usage=usage,
             timing=timing,
@@ -974,7 +1121,10 @@ class GatewayEngine:
 
 # ── Factory helpers (Fix #3) ─────────────────────────────────────────────────
 
-def create_engine(registry: Optional[ProviderRegistry] = None) -> GatewayEngine:
+def create_engine(
+    registry: Optional[ProviderRegistry] = None,
+    validator_hook: Optional[Callable[..., Any]] = None,
+) -> GatewayEngine:
     """Create a fresh, isolated GatewayEngine instance.
 
     Fix #3: Tests and DI containers should use this instead of mutating the
@@ -987,12 +1137,15 @@ def create_engine(registry: Optional[ProviderRegistry] = None) -> GatewayEngine:
         def engine() -> GatewayEngine:
             return create_engine()
     """
-    return GatewayEngine(registry=registry)
+    return GatewayEngine(registry=registry, validator_hook=validator_hook)
 
 
-def create_engine_for_registry(registry: ProviderRegistry) -> GatewayEngine:
+def create_engine_for_registry(
+    registry: ProviderRegistry,
+    validator_hook: Optional[Callable[..., Any]] = None,
+) -> GatewayEngine:
     """Convenience alias for ``create_engine(registry=registry)``."""
-    return GatewayEngine(registry=registry)
+    return GatewayEngine(registry=registry, validator_hook=validator_hook)
 
 
 # ── Global engine singleton (backward compat) ────────────────────────────────
@@ -1003,23 +1156,30 @@ def get_gateway_engine() -> GatewayEngine:
     return _GLOBAL_ENGINE
 
 
-def invoke_llm(request: LLMRequestV1) -> LLMResultV1:
+def invoke_llm(
+    request: LLMRequestV1,
+    validator_hook: Optional[Callable[..., Any]] = None,
+) -> LLMResultV1:
     """Public synchronous entry point for LLM Gateway.
 
     .. warning::
         Blocking call – do not use from async code.  Use ``invoke_llm_async``
         or ``invoke_llm_in_executor`` instead.
     """
-    return _GLOBAL_ENGINE.invoke_llm(request)
+    return _GLOBAL_ENGINE.invoke_llm(request, validator_hook=validator_hook)
 
 
-async def invoke_llm_async(request: LLMRequestV1) -> LLMResultV1:
+async def invoke_llm_async(
+    request: LLMRequestV1,
+    validator_hook: Optional[Callable[..., Any]] = None,
+) -> LLMResultV1:
     """Public asynchronous entry point for LLM Gateway."""
-    return await _GLOBAL_ENGINE.invoke_llm_async(request)
+    return await _GLOBAL_ENGINE.invoke_llm_async(request, validator_hook=validator_hook)
 
 
 async def invoke_llm_in_executor(
     request: LLMRequestV1,
+    validator_hook: Optional[Callable[..., Any]] = None,
     executor: Optional[ThreadPoolExecutor] = None,
 ) -> LLMResultV1:
     """Run the global sync engine safely from within an async context.
@@ -1027,4 +1187,5 @@ async def invoke_llm_in_executor(
     Fix #2: Wraps ``invoke_llm`` in ``loop.run_in_executor`` so it doesn't
     block the event loop.
     """
-    return await _GLOBAL_ENGINE.invoke_llm_in_executor(request, executor=executor)
+    return await _GLOBAL_ENGINE.invoke_llm_in_executor(request, validator_hook=validator_hook, executor=executor)
+
