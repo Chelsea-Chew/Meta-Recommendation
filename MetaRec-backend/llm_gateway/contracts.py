@@ -204,6 +204,11 @@ class AttemptKind(str, Enum):
 
 
 class AttemptOutcome(str, Enum):
+    # Two-value contract outcomes (for evaluation and cost accounting alignment)
+    RESPONSE_RETURNED = "response_returned"
+    NO_RESPONSE_RETURNED = "no_response_returned"
+
+    # Detailed attempt outcomes
     SUCCESS = "success"
     TRANSPORT_ERROR = "transport_error"
     COMPATIBILITY_ERROR = "compatibility_error"
@@ -239,6 +244,7 @@ class PhysicalAttemptV1(BaseModel):
     ended_at_utc: Optional[float] = None
     latency_ms: float
     outcome: AttemptOutcome
+    detailed_outcome: Optional[AttemptOutcome] = None
     http_status: Optional[int] = None
     provider_request_id: Optional[str] = None
     # Usage Provenance: None indicates unreported/missing usage; 0 means explicitly reported 0
@@ -255,9 +261,20 @@ class PhysicalAttemptV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     @property
+    def contract_outcome(self) -> AttemptOutcome:
+        """Map internal attempt outcome to two-value contract: response_returned / no_response_returned."""
+        if self.outcome in (
+            AttemptOutcome.RESPONSE_RETURNED,
+            AttemptOutcome.SUCCESS,
+            AttemptOutcome.VALIDATION_ERROR,
+        ):
+            return AttemptOutcome.RESPONSE_RETURNED
+        return AttemptOutcome.NO_RESPONSE_RETURNED
+
+    @property
     def provider_response_received(self) -> bool:
         """True if an actual completion HTTP response was returned from the provider."""
-        return self.outcome in (AttemptOutcome.SUCCESS, AttemptOutcome.VALIDATION_ERROR)
+        return self.contract_outcome == AttemptOutcome.RESPONSE_RETURNED
 
 
 class ToolCallOutputV1(BaseModel):

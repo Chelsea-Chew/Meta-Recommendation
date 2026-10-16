@@ -131,12 +131,9 @@ def validate_json_schema(
 ) -> Tuple[bool, List[str]]:
     """Full JSON Schema compliance check (Draft-7 via ``jsonschema``).
 
-    If ``jsonschema`` is not installed, falls back to the previous shallow
-    structural check (top-level type + required keys + additionalProperties).
-
-    Fix #1: Replaced hand-rolled checker with real Draft-7 validation so that
-    nested objects, field types, enum values, patterns, and ``$ref`` are all
-    validated correctly.
+    Fails closed: if a JSON Schema is required but the ``jsonschema`` library
+    is not installed, returns a structured validation failure rather than silently
+    falling back to a weaker check.
     """
     if not json_schema:
         return True, []
@@ -144,7 +141,7 @@ def validate_json_schema(
     if _JSONSCHEMA_AVAILABLE:
         return _validate_with_jsonschema(parsed_json, json_schema)
     else:
-        return _validate_shallow(parsed_json, json_schema)
+        return False, ["JSON Schema validator unavailable: 'jsonschema' package is required but not installed (fail-closed)"]
 
 
 def _validate_with_jsonschema(

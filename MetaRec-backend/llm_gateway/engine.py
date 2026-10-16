@@ -60,6 +60,7 @@ from llm_gateway.constants import (
     HTTP_STATUS_OK,
     MS_PER_SECOND,
     ProviderId,
+    SemanticValidatorId,
 )
 from llm_gateway.contracts import (
     AttemptKind,
@@ -385,6 +386,7 @@ class GatewayEngine:
             ended_at_utc=round(ended_at, 6),
             latency_ms=round(latency_ms, 2),
             outcome=outcome,
+            detailed_outcome=outcome,
             http_status=resp.http_status if resp else (HTTP_STATUS_INTERNAL_SERVER_ERROR if error else HTTP_STATUS_OK),
             provider_request_id=resp.provider_request_id if resp else None,
             prompt_tokens=p_tokens if is_usage_reported else None,
@@ -506,15 +508,23 @@ class GatewayEngine:
                 return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
             val_summary.json_schema = ValidationGateStatus.PASSED
 
-            # Semantic Validation
-            sem_validator = get_validator_registry().get_validator(contract.semantic_validator_id)
-            if sem_validator:
+            # Semantic Validation (Fail-closed on unknown validator ID)
+            if contract.semantic_validator_id and contract.semantic_validator_id != SemanticValidatorId.NONE.value:
+                sem_validator = get_validator_registry().get_validator(contract.semantic_validator_id)
+                if sem_validator is None:
+                    val_summary.semantic = ValidationGateStatus.FAILED
+                    val_summary.errors.append(
+                        f"Unknown semantic validator ID: '{contract.semantic_validator_id}' (fail-closed)"
+                    )
+                    return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
                 sem_ok, sem_errs = sem_validator(parsed_json, contract.validator_inputs)
                 if not sem_ok:
                     val_summary.semantic = ValidationGateStatus.FAILED
                     val_summary.errors.extend(sem_errs)
                     return ValidationGateResultV1(passed=False, summary=val_summary, payload=None)
                 val_summary.semantic = ValidationGateStatus.PASSED
+            else:
+                val_summary.semantic = ValidationGateStatus.NOT_APPLICABLE
 
             output = OutputPayloadV1(kind=ResponseKind.JSON, text=raw_text, json=parsed_json)
             return ValidationGateResultV1(passed=True, summary=val_summary, payload=output)
@@ -544,6 +554,19 @@ class GatewayEngine:
             if payload.kind != ResponseKind.TOOL_CALLS:
                 return False, f"Expected TOOL_CALLS payload kind, got {payload.kind.value}"
         return True, None
+
+    @staticmethod
+    def _is_terminal_validation_error(val_summary: ValidationSummaryV1) -> bool:
+        """Identify configuration or infrastructure failures that should not trigger route retries."""
+        for err in val_summary.errors:
+            err_lower = err.lower()
+            if "unknown semantic validator" in err_lower:
+                return True
+            if "json schema validator unavailable" in err_lower:
+                return True
+            if "json schema error:" in err_lower:
+                return True
+        return False
 
     def _execute_validation_sync(
         self,
@@ -649,9 +672,10 @@ class GatewayEngine:
         released_output: Optional[OutputPayloadV1] = None
         final_val_summary = ValidationSummaryV1(validator_id=request.response_contract.semantic_validator_id)
         degradation: Optional[DegradationSummaryV1] = None
+        terminal_failure = False
 
         for route, leg in route_ladder:
-            if released_output is not None:
+            if released_output is not None or terminal_failure:
                 break
 
             route_attempts = 0
@@ -738,7 +762,9 @@ class GatewayEngine:
                         )
                         attempts.append(attempt)
                         last_error = val_err
-                        break  # Fall back to next route in ladder
+                        if self._is_terminal_validation_error(val_summary):
+                            terminal_failure = True
+                        break  # Fall back to next route in ladder unless terminal failure
 
                 except CompatibilityError as exc:
                     lat_ms = (time.monotonic() - att_start_mono) * MS_PER_SECOND
@@ -814,9 +840,10 @@ class GatewayEngine:
         released_output: Optional[OutputPayloadV1] = None
         final_val_summary = ValidationSummaryV1(validator_id=request.response_contract.semantic_validator_id)
         degradation: Optional[DegradationSummaryV1] = None
+        terminal_failure = False
 
         for route, leg in route_ladder:
-            if released_output is not None:
+            if released_output is not None or terminal_failure:
                 break
 
             route_attempts = 0
@@ -901,6 +928,8 @@ class GatewayEngine:
                         )
                         attempts.append(attempt)
                         last_error = val_err
+                        if self._is_terminal_validation_error(val_summary):
+                            terminal_failure = True
                         break
 
                 except CompatibilityError as exc:

@@ -601,3 +601,69 @@ def test_failed_result_validation_summary_separation(fake_adapter: FakeLLMAdapte
     assert result.error.code == "validation_failed"
 
 
+def test_unknown_semantic_validator_fails_closed_and_aborts_ladder(fake_adapter: FakeLLMAdapter):
+    """Unknown semantic validator IDs must fail-closed and abort the route ladder to avoid useless retries."""
+    fake_adapter.enqueue_response(ScriptedResponse(text='{"data": "valid json"}'))
+    fake_adapter.enqueue_response(ScriptedResponse(text='{"data": "fallback response"}'))
+
+    routing = RoutingPolicyV1(
+        mode=RoutingMode.BASELINE,
+        baseline_route=RouteV1(provider_id="fake_provider", model_id="fake-strong", policy_leg=PolicyLeg.BASELINE),
+        fallback_routes=[RouteV1(provider_id="fake_provider", model_id="fake-fast", policy_leg=PolicyLeg.FALLBACK)],
+    )
+    contract = ResponseContractV1(
+        kind=ResponseKind.JSON,
+        schema_id="test.schema",
+        json_schema={"type": "object"},
+        semantic_validator_id="nonexistent.validator.v99",
+    )
+    req = _make_request(response_contract=contract, routing_policy=routing)
+    result = invoke_llm(req)
+
+    assert result.status == ResultStatus.FAILED
+    assert result.output is None
+    assert result.selected_route is None
+
+    # Fail-closed semantic failure recorded in attempt
+    assert len(result.attempts) == 1  # Crucial: did not retry on fallback route!
+    att = result.attempts[0]
+    assert att.outcome == AttemptOutcome.VALIDATION_ERROR
+    assert att.contract_outcome == AttemptOutcome.RESPONSE_RETURNED
+    assert att.provider_response_received is True
+    assert att.detailed_outcome == AttemptOutcome.VALIDATION_ERROR
+    assert att.validation_summary.semantic == ValidationGateStatus.FAILED
+    assert any("Unknown semantic validator ID" in e for e in att.validation_summary.errors)
+
+
+def test_unavailable_json_schema_validator_fails_closed_and_aborts_ladder(
+    fake_adapter: FakeLLMAdapter, monkeypatch
+):
+    """When jsonschema library is unavailable, schema validation fails closed and does not retry."""
+    import llm_gateway.validators as val_mod
+    monkeypatch.setattr(val_mod, "_JSONSCHEMA_AVAILABLE", False)
+
+    fake_adapter.enqueue_response(ScriptedResponse(text='{"key": "value"}'))
+    fake_adapter.enqueue_response(ScriptedResponse(text='{"key": "fallback"}'))
+
+    routing = RoutingPolicyV1(
+        mode=RoutingMode.BASELINE,
+        baseline_route=RouteV1(provider_id="fake_provider", model_id="fake-strong", policy_leg=PolicyLeg.BASELINE),
+        fallback_routes=[RouteV1(provider_id="fake_provider", model_id="fake-fast", policy_leg=PolicyLeg.FALLBACK)],
+    )
+    contract = ResponseContractV1(
+        kind=ResponseKind.JSON,
+        schema_id="test.schema",
+        json_schema={"type": "object", "required": ["key"]},
+    )
+    req = _make_request(response_contract=contract, routing_policy=routing)
+    result = invoke_llm(req)
+
+    assert result.status == ResultStatus.FAILED
+    assert result.output is None
+    # Crucial: terminal infrastructure failure aborts without retrying fallback route
+    assert len(result.attempts) == 1
+    assert result.attempts[0].validation_summary.json_schema == ValidationGateStatus.FAILED
+    assert any("JSON Schema validator unavailable" in e for e in result.attempts[0].validation_summary.errors)
+
+
+

@@ -6,6 +6,7 @@ import pytest
 
 from llm_gateway import (
     AdapterKind,
+    AttemptOutcome,
     BudgetConfigV1,
     ConfigurationError,
     CredentialStatus,
@@ -188,3 +189,61 @@ def test_kill_switch_default_reason():
         assert get_kill_switch_reason() == DEFAULT_KILL_SWITCH_REASON
     finally:
         set_kill_switch(False)
+
+
+def test_attempt_outcome_contract_and_detailed_mapping():
+    """AttemptOutcome contract enum values and PhysicalAttemptV1 mapping."""
+    assert AttemptOutcome.RESPONSE_RETURNED == "response_returned"
+    assert AttemptOutcome.NO_RESPONSE_RETURNED == "no_response_returned"
+    assert AttemptOutcome.SUCCESS == "success"
+    assert AttemptOutcome.VALIDATION_ERROR == "validation_error"
+    assert AttemptOutcome.TRANSPORT_ERROR == "transport_error"
+
+    # Verify PhysicalAttemptV1 mapping behavior
+    att_success = PhysicalAttemptV1(
+        attempt_id="att-1",
+        request_id="req-1",
+        attempt_number=1,
+        provider_id="fake_provider",
+        model_id="fake-strong",
+        policy_leg=PolicyLeg.BASELINE,
+        attempt_kind="initial",
+        started_at_utc=100.0,
+        latency_ms=10.0,
+        outcome=AttemptOutcome.SUCCESS,
+        detailed_outcome=AttemptOutcome.SUCCESS,
+    )
+    assert att_success.contract_outcome == AttemptOutcome.RESPONSE_RETURNED
+    assert att_success.provider_response_received is True
+    assert att_success.detailed_outcome == AttemptOutcome.SUCCESS
+
+    att_val_err = PhysicalAttemptV1(
+        attempt_id="att-2",
+        request_id="req-1",
+        attempt_number=2,
+        provider_id="fake_provider",
+        model_id="fake-strong",
+        policy_leg=PolicyLeg.BASELINE,
+        attempt_kind="validation_retry",
+        started_at_utc=100.0,
+        latency_ms=10.0,
+        outcome=AttemptOutcome.VALIDATION_ERROR,
+    )
+    assert att_val_err.contract_outcome == AttemptOutcome.RESPONSE_RETURNED
+    assert att_val_err.provider_response_received is True
+
+    att_transport_err = PhysicalAttemptV1(
+        attempt_id="att-3",
+        request_id="req-1",
+        attempt_number=3,
+        provider_id="fake_provider",
+        model_id="fake-strong",
+        policy_leg=PolicyLeg.BASELINE,
+        attempt_kind="transport_retry",
+        started_at_utc=100.0,
+        latency_ms=10.0,
+        outcome=AttemptOutcome.TRANSPORT_ERROR,
+    )
+    assert att_transport_err.contract_outcome == AttemptOutcome.NO_RESPONSE_RETURNED
+    assert att_transport_err.provider_response_received is False
+
